@@ -322,10 +322,13 @@ def update_pqrs(
     db: Session, pqrs_id: int, data: PQRSUpdate, actor: Usuario
 ) -> PQRS:
     pqrs = _get_pqrs_or_404(db, pqrs_id)
-    if actor.rol != RolUsuario.ADMINISTRADOR.value:
+    if actor.rol not in (
+        RolUsuario.ADMINISTRADOR.value,
+        RolUsuario.ADMINISTRATIVO_COMERCIAL.value,
+    ):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Solo el administrador puede editar una PQRS.",
+            "Solo administrador o administrativo comercial pueden editar una PQRS.",
         )
     changes = data.model_dump(exclude_unset=True)
 

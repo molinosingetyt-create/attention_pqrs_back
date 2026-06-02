@@ -67,7 +67,12 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        origins = []
+        for o in self.CORS_ORIGINS.split(","):
+            origin = o.strip().rstrip("/")
+            if origin:
+                origins.append(origin)
+        return origins
 
     def _parse_email_list(self, raw: str) -> list[str]:
         return [email.strip() for email in re.split(r"[,;\s]+", raw) if email.strip()]

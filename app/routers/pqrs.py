@@ -167,7 +167,18 @@ def detalle(
     return _to_detail(pqrs_service.get_pqrs_detail(db, pqrs_id, actor=actor))
 
 
-@router.put("/{pqrs_id}", response_model=PQRSDetail)
+@router.put(
+    "/{pqrs_id}",
+    response_model=PQRSDetail,
+    dependencies=[
+        Depends(
+            require_roles(
+                RolUsuario.ADMINISTRADOR,
+                RolUsuario.ADMINISTRATIVO_COMERCIAL,
+            )
+        )
+    ],
+)
 def actualizar(
     pqrs_id: int,
     data: PQRSUpdate,
