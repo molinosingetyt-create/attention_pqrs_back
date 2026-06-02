@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, Query, status
+from io import BytesIO
+
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -6,8 +9,9 @@ from app.core.deps import get_current_user, require_roles
 from app.core.enums import RolUsuario
 from app.models.usuario import Usuario
 from app.schemas.cliente import ClienteCreate, ClienteOut, ClienteUpdate
+from app.schemas.cliente_carga import ClienteCargaMasivaResultado
 from app.schemas.common import Page
-from app.services import cliente_service
+from app.services import cliente_carga_masiva_service, cliente_service
 
 
 router = APIRouter(
@@ -35,6 +39,35 @@ def listar(
         size=size,
         pages=(total + size - 1) // size,
     )
+
+
+@router.get(
+    "/carga-masiva/plantilla",
+    dependencies=[Depends(require_roles(RolUsuario.ADMINISTRADOR))],
+)
+def descargar_plantilla_carga_masiva(db: Session = Depends(get_db)):
+    """Plantilla Excel para cargue masivo de clientes (solo administrador)."""
+    content = cliente_carga_masiva_service.generar_plantilla_excel(db)
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="plantilla_clientes.xlsx"'
+        },
+    )
+
+
+@router.post(
+    "/carga-masiva",
+    response_model=ClienteCargaMasivaResultado,
+    dependencies=[Depends(require_roles(RolUsuario.ADMINISTRADOR))],
+)
+def importar_carga_masiva(
+    archivo: UploadFile = File(..., description="Excel .xlsx con clientes"),
+    db: Session = Depends(get_db),
+):
+    """Importa clientes y asigna vendedor por nombre exacto (solo administrador)."""
+    return cliente_carga_masiva_service.importar_clientes_excel(db, archivo)
 
 
 @router.get("/{cliente_id}", response_model=ClienteOut)
