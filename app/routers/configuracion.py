@@ -3,8 +3,8 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
-from app.core.enums import RolUsuario
+from app.core.deps import get_current_user, require_permission
+from app.core.permissions import Permiso
 from app.schemas.area import AreaCreate, AreaOut, AreaUpdate
 from app.schemas.categoria_producto import (
     CategoriaProductoCreate,
@@ -21,7 +21,7 @@ router = APIRouter(
     tags=["Configuración"],
     dependencies=[
         Depends(get_current_user),
-        Depends(require_roles(RolUsuario.ADMINISTRADOR)),
+        Depends(require_permission(Permiso.CONFIG_GESTIONAR)),
     ],
 )
 

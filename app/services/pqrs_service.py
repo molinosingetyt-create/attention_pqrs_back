@@ -9,6 +9,8 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.enums import EstadoPQRS, RolUsuario, TipoPQRS
+from app.core.permissions import Permiso
+from app.services import permission_service
 from app.core.config import settings
 from app.models.cliente import Cliente
 from app.models.evidencia import Evidencia
@@ -322,14 +324,7 @@ def update_pqrs(
     db: Session, pqrs_id: int, data: PQRSUpdate, actor: Usuario
 ) -> PQRS:
     pqrs = _get_pqrs_or_404(db, pqrs_id)
-    if actor.rol not in (
-        RolUsuario.ADMINISTRADOR.value,
-        RolUsuario.ADMINISTRATIVO_COMERCIAL.value,
-    ):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Solo administrador o administrativo comercial pueden editar una PQRS.",
-        )
+    permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
     changes = data.model_dump(exclude_unset=True)
 
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value) and changes:
@@ -467,14 +462,7 @@ def add_evidencia(
 def add_seguimiento(
     db: Session, pqrs_id: int, estado: EstadoPQRS, descripcion: str | None, actor: Usuario
 ) -> Seguimiento:
-    if actor.rol not in (
-        RolUsuario.ADMINISTRADOR.value,
-        RolUsuario.ADMINISTRATIVO_COMERCIAL.value,
-    ):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Solo administrador o administrativo comercial pueden registrar seguimiento.",
-        )
+    permission_service.exigir_permiso(db, actor, Permiso.PQRS_SEGUIMIENTO_CREAR)
     pqrs = _get_pqrs_or_404(db, pqrs_id)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(

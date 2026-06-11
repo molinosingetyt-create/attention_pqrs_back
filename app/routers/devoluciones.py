@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
+from app.core.deps import get_current_user, require_permission
 from app.core.enums import RolUsuario
+from app.core.permissions import Permiso
 from app.models.usuario import Usuario
 from app.schemas.devolucion import (
     DevolucionDetalleOut,
@@ -12,17 +13,12 @@ from app.schemas.devolucion import (
 )
 from app.services import devolucion_service
 
-_devoluciones_roles = (
-    RolUsuario.ADMINISTRADOR,
-    RolUsuario.CALIDAD,
-)
-
 router = APIRouter(
     prefix="/devoluciones",
     tags=["Devoluciones"],
     dependencies=[
         Depends(get_current_user),
-        Depends(require_roles(*_devoluciones_roles)),
+        Depends(require_permission(Permiso.DEVOLUCIONES_LISTAR)),
     ],
 )
 

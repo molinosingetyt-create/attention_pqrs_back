@@ -4,11 +4,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
-from app.core.enums import RolUsuario
+from app.core.deps import get_current_user, require_permission
+from app.core.permissions import Permiso
 from app.core.security import create_access_token
 from app.models.usuario import Usuario
-from app.schemas.auth import TokenResponse
+from app.schemas.auth import SessionOut, TokenResponse
+from app.services import permission_service
 from app.schemas.usuario import UsuarioCreate, UsuarioOut
 from app.services import auth_service, usuario_service
 
@@ -32,10 +33,12 @@ def login(
     token = create_access_token(
         subject=user.id, extra_claims={"rol": user.rol, "email": user.email}
     )
+    permisos = permission_service.permisos_usuario(db, user)
     return TokenResponse(
         access_token=token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=UsuarioOut.model_validate(user),
+        permisos=permisos,
     )
 
 
@@ -43,13 +46,19 @@ def login(
     "/register",
     response_model=UsuarioOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_roles(RolUsuario.ADMINISTRADOR))],
+    dependencies=[Depends(require_permission(Permiso.USUARIOS_GESTIONAR))],
 )
 def register(data: UsuarioCreate, db: Session = Depends(get_db)):
     """Registro de usuario: solo accesible para administradores."""
     return usuario_service.create_usuario(db, data)
 
 
-@router.get("/me", response_model=UsuarioOut)
-def me(current: Usuario = Depends(get_current_user)):
-    return current
+@router.get("/me", response_model=SessionOut)
+def me(
+    db: Session = Depends(get_db),
+    current: Usuario = Depends(get_current_user),
+):
+    return SessionOut(
+        user=UsuarioOut.model_validate(current),
+        permisos=permission_service.permisos_usuario(db, current),
+    )

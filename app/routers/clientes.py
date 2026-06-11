@@ -1,12 +1,10 @@
-from io import BytesIO
-
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
-from app.core.enums import RolUsuario
+from app.core.deps import get_current_user, require_permission
+from app.core.permissions import Permiso
 from app.models.usuario import Usuario
 from app.schemas.cliente import ClienteCreate, ClienteOut, ClienteUpdate
 from app.schemas.cliente_carga import ClienteCargaMasivaResultado
@@ -43,16 +41,17 @@ def listar(
 
 @router.get(
     "/carga-masiva/plantilla",
-    dependencies=[Depends(require_roles(RolUsuario.ADMINISTRADOR))],
+    dependencies=[Depends(require_permission(Permiso.CLIENTES_CARGA_MASIVA))],
 )
 def descargar_plantilla_carga_masiva(db: Session = Depends(get_db)):
     """Plantilla Excel para cargue masivo de clientes (solo administrador)."""
     content = cliente_carga_masiva_service.generar_plantilla_excel(db)
-    return StreamingResponse(
-        BytesIO(content),
+    return Response(
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": 'attachment; filename="plantilla_clientes.xlsx"'
+            "Content-Disposition": 'attachment; filename="plantilla_clientes.xlsx"',
+            "Content-Length": str(len(content)),
         },
     )
 
@@ -60,7 +59,7 @@ def descargar_plantilla_carga_masiva(db: Session = Depends(get_db)):
 @router.post(
     "/carga-masiva",
     response_model=ClienteCargaMasivaResultado,
-    dependencies=[Depends(require_roles(RolUsuario.ADMINISTRADOR))],
+    dependencies=[Depends(require_permission(Permiso.CLIENTES_CARGA_MASIVA))],
 )
 def importar_carga_masiva(
     archivo: UploadFile = File(..., description="Excel .xlsx con clientes"),
@@ -83,15 +82,7 @@ def obtener(
     "/",
     response_model=ClienteOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(
-            require_roles(
-                RolUsuario.ADMINISTRADOR,
-                RolUsuario.ADMINISTRATIVO_COMERCIAL,
-                RolUsuario.VENDEDOR,
-            )
-        )
-    ],
+    dependencies=[Depends(require_permission(Permiso.CLIENTES_CREAR))],
 )
 def crear(
     data: ClienteCreate,
@@ -104,15 +95,7 @@ def crear(
 @router.put(
     "/{cliente_id}",
     response_model=ClienteOut,
-    dependencies=[
-        Depends(
-            require_roles(
-                RolUsuario.ADMINISTRADOR,
-                RolUsuario.ADMINISTRATIVO_COMERCIAL,
-                RolUsuario.VENDEDOR,
-            )
-        )
-    ],
+    dependencies=[Depends(require_permission(Permiso.CLIENTES_EDITAR))],
 )
 def actualizar(
     cliente_id: int,
@@ -126,7 +109,7 @@ def actualizar(
 @router.delete(
     "/{cliente_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_roles(RolUsuario.ADMINISTRADOR))],
+    dependencies=[Depends(require_permission(Permiso.CLIENTES_ELIMINAR))],
 )
 def eliminar(cliente_id: int, db: Session = Depends(get_db)):
     cliente_service.delete_cliente(db, cliente_id)

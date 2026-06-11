@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import require_roles
-from app.core.enums import RolUsuario
+from app.core.deps import require_permission
+from app.core.permissions import Permiso
 from app.schemas.usuario import UsuarioCreate, UsuarioOut, UsuarioUpdate
 from app.services import usuario_service
 
@@ -18,16 +18,7 @@ router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 @router.get(
     "/vendedores",
     response_model=list[UsuarioOut],
-    dependencies=[
-        Depends(
-            require_roles(
-                RolUsuario.ADMINISTRADOR,
-                RolUsuario.ADMINISTRATIVO_COMERCIAL,
-                RolUsuario.CALIDAD,
-                RolUsuario.VENDEDOR,
-            )
-        )
-    ],
+    dependencies=[Depends(require_permission(Permiso.USUARIOS_LISTAR_VENDEDORES))],
 )
 def listar_vendedores(db: Session = Depends(get_db)):
     return usuario_service.list_vendedores(db, solo_activos=True)
@@ -36,7 +27,7 @@ def listar_vendedores(db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # Resto de endpoints: solo ADMINISTRADOR
 # ---------------------------------------------------------------------------
-_admin_only = Depends(require_roles(RolUsuario.ADMINISTRADOR))
+_admin_only = Depends(require_permission(Permiso.USUARIOS_GESTIONAR))
 
 
 @router.get("/", response_model=list[UsuarioOut], dependencies=[_admin_only])

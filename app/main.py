@@ -23,10 +23,12 @@ from app.routers import (
     dashboard,
     devoluciones,
     inconformidades,
+    permisos,
     pqrs,
     seguimiento,
     usuarios,
 )
+from app.services import permission_service
 from app.services.storage_service import ensure_upload_dirs
 
 
@@ -41,6 +43,10 @@ async def lifespan(app: FastAPI):
     ensure_upload_dirs()
     try:
         seed()
+        from app.core.database import SessionLocal
+
+        with SessionLocal() as db:
+            permission_service.sembrar_defaults(db)
     except Exception as e:
         logger.error(f"No se pudo aplicar seed inicial: {e}")
         raise
@@ -117,6 +123,7 @@ app.include_router(pqrs.router, prefix=api_prefix)
 app.include_router(seguimiento.router, prefix=api_prefix)
 app.include_router(devoluciones.router, prefix=api_prefix)
 app.include_router(dashboard.router, prefix=api_prefix)
+app.include_router(permisos.router, prefix=api_prefix)
 
 
 upload_path = Path(settings.UPLOAD_DIR)

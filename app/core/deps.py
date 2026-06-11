@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.enums import RolUsuario
 from app.core.security import decode_token
 from app.models.usuario import Usuario
+from app.services import permission_service
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=True)
@@ -48,6 +49,19 @@ def require_roles(*roles: RolUsuario):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="No tienes permisos para realizar esta acción.",
             )
+        return user
+
+    return _checker
+
+
+def require_permission(*permisos: str):
+    """Factory: exige al menos uno de los permisos indicados."""
+
+    def _checker(
+        user: Usuario = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> Usuario:
+        permission_service.exigir_permiso(db, user, *permisos)
         return user
 
     return _checker

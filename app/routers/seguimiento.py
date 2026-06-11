@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
-from app.core.enums import RolUsuario
+from app.core.deps import get_current_user, require_permission
+from app.core.permissions import Permiso
 from app.models.usuario import Usuario
 from app.schemas.pqrs import SeguimientoCreate, SeguimientoOut
 from app.services import pqrs_service
@@ -16,14 +16,7 @@ router = APIRouter(prefix="/seguimientos", tags=["Seguimientos"])
     "/pqrs/{pqrs_id}",
     response_model=SeguimientoOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(
-            require_roles(
-                RolUsuario.ADMINISTRADOR,
-                RolUsuario.ADMINISTRATIVO_COMERCIAL,
-            )
-        )
-    ],
+    dependencies=[Depends(require_permission(Permiso.PQRS_SEGUIMIENTO_CREAR))],
 )
 def crear(
     pqrs_id: int,

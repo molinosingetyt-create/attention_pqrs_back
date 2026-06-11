@@ -6,8 +6,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
-from app.core.enums import EstadoPQRS, RolUsuario, TipoPQRS
+from app.core.deps import get_current_user, require_permission
+from app.core.enums import EstadoPQRS, TipoPQRS
+from app.core.permissions import Permiso
 from app.models.usuario import Usuario
 from app.schemas.common import Page
 from app.schemas.pqrs import (
@@ -34,16 +35,7 @@ router = APIRouter(
     "/",
     response_model=PQRSDetail,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(
-            require_roles(
-                RolUsuario.ADMINISTRADOR,
-                RolUsuario.ADMINISTRATIVO_COMERCIAL,
-                RolUsuario.VENDEDOR,
-                RolUsuario.CALIDAD,
-            )
-        )
-    ],
+    dependencies=[Depends(require_permission(Permiso.PQRS_CREAR))],
 )
 def crear_pqrs(
     data: PQRSCreate,
@@ -170,14 +162,7 @@ def detalle(
 @router.put(
     "/{pqrs_id}",
     response_model=PQRSDetail,
-    dependencies=[
-        Depends(
-            require_roles(
-                RolUsuario.ADMINISTRADOR,
-                RolUsuario.ADMINISTRATIVO_COMERCIAL,
-            )
-        )
-    ],
+    dependencies=[Depends(require_permission(Permiso.PQRS_EDITAR))],
 )
 def actualizar(
     pqrs_id: int,

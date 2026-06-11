@@ -11,8 +11,15 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: "UsuarioOut"
+    permisos: list[str] = []
+
+
+class SessionOut(BaseModel):
+    user: "UsuarioOut"
+    permisos: list[str] = []
 
 
 from app.schemas.usuario import UsuarioOut  # noqa: E402
 
 TokenResponse.model_rebuild()
+SessionOut.model_rebuild()

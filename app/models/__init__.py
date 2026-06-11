@@ -14,3 +14,4 @@ from app.models.producto_pqrs import ProductoPQRS  # noqa: F401
 from app.models.evidencia import Evidencia  # noqa: F401
 from app.models.seguimiento import Seguimiento  # noqa: F401
 from app.models.devolucion import Devolucion  # noqa: F401
+from app.models.rol_permiso import RolPermiso  # noqa: F401

@@ -3,6 +3,8 @@ from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.enums import RolUsuario
+from app.core.permissions import Permiso
+from app.services import permission_service
 from app.models.cliente import Cliente
 from app.models.pqrs import PQRS
 from app.models.usuario import Usuario
@@ -88,7 +90,8 @@ def create_cliente(db: Session, data: ClienteCreate, actor: Usuario) -> Cliente:
 
     if actor.rol == RolUsuario.VENDEDOR.value:
         vendedor_asignado_id = actor.id
-    elif actor.rol == RolUsuario.ADMINISTRADOR.value and data.vendedor_asignado_id is not None:
+    elif data.vendedor_asignado_id is not None:
+        permission_service.exigir_permiso(db, actor, Permiso.CLIENTES_ASIGNAR_VENDEDOR)
         v = db.get(Usuario, data.vendedor_asignado_id)
         if not v or v.rol != RolUsuario.VENDEDOR.value or not v.activo:
             raise HTTPException(
@@ -127,16 +130,10 @@ def update_cliente(db: Session, cliente_id: int, data: ClienteUpdate, actor: Usu
                     "Solo el administrador puede deshabilitar clientes o asignar vendedor.",
                 )
 
-    if "vendedor_asignado_id" in changes and actor.rol != RolUsuario.ADMINISTRADOR.value:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Solo el administrador puede asignar o reasignar vendedor.",
-        )
-    if "activo" in changes and actor.rol != RolUsuario.ADMINISTRADOR.value:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Solo el administrador puede habilitar o deshabilitar clientes.",
-        )
+    if "vendedor_asignado_id" in changes:
+        permission_service.exigir_permiso(db, actor, Permiso.CLIENTES_ASIGNAR_VENDEDOR)
+    if "activo" in changes:
+        permission_service.exigir_permiso(db, actor, Permiso.CLIENTES_ACTIVAR)
 
     if "vendedor_asignado_id" in changes:
         vid = changes["vendedor_asignado_id"]
