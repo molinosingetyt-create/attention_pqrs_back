@@ -30,3 +30,9 @@ class ProductoPQRS(Base):
     pqrs = relationship("PQRS", back_populates="productos")
     producto_catalogo = relationship("ProductoCatalogo", back_populates="lineas_pqrs")
     inconformidad = relationship("Inconformidad")
+    evidencias = relationship(
+        "Evidencia",
+        back_populates="producto_pqrs",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )

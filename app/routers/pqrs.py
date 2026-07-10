@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
-from app.core.enums import EstadoPQRS, TipoPQRS
+from app.core.enums import EstadoPQRS, TipoEvidencia, TipoPQRS
 from app.core.permissions import Permiso
 from app.models.usuario import Usuario
 from app.schemas.common import Page
 from app.schemas.pqrs import (
+    AnalisisResponsabilidadOut,
+    AnalisisResponsabilidadUpsert,
     EvidenciaOut,
     PQRSCreate,
     PQRSDetail,
@@ -19,6 +21,8 @@ from app.schemas.pqrs import (
     PQRSUpdate,
     ProductoPQRSCreate,
     ProductoPQRSOut,
+    SatisfaccionClienteOut,
+    SatisfaccionClienteUpsert,
     SeguimientoOut,
 )
 from app.services import pqrs_service, storage_service
@@ -121,6 +125,7 @@ def exportar_pqrs(
             "Cliente",
             "Vendedor",
             "Área responsable",
+            "Estado área resp.",
             "Factura",
             "Fecha creación",
             "Fecha cierre",
@@ -135,6 +140,7 @@ def exportar_pqrs(
                 it["cliente_nombre"],
                 it["vendedor_nombre"],
                 it["area_nombre"] or "",
+                it["estado_area_responsable"],
                 it["numero_factura"] or "",
                 it["fecha_creacion"].strftime("%Y-%m-%d %H:%M") if it["fecha_creacion"] else "",
                 it["fecha_cierre"].strftime("%Y-%m-%d %H:%M") if it["fecha_cierre"] else "",
@@ -179,6 +185,7 @@ def agregar_productos(
     productos: list[ProductoPQRSCreate],
     db: Session = Depends(get_db),
     actor: Usuario = Depends(get_current_user),
+    _: None = Depends(require_permission(Permiso.PQRS_EDITAR)),
 ):
     creados = pqrs_service.add_productos(db, pqrs_id, productos, actor=actor)
     return [ProductoPQRSOut.model_validate(p) for p in creados]
@@ -190,6 +197,7 @@ def eliminar_producto(
     producto_id: int,
     db: Session = Depends(get_db),
     actor: Usuario = Depends(get_current_user),
+    _: None = Depends(require_permission(Permiso.PQRS_EDITAR)),
 ):
     pqrs_service.delete_producto(db, pqrs_id, producto_id, actor=actor)
 
@@ -198,21 +206,49 @@ def eliminar_producto(
 async def subir_evidencia(
     pqrs_id: int,
     file: UploadFile = File(...),
+    producto_pqrs_id: int = Query(...),
+    tipo: TipoEvidencia = Query(...),
     carga_inicial: bool = Query(False),
     db: Session = Depends(get_db),
     actor: Usuario = Depends(get_current_user),
 ):
-    stored = await storage_service.save_upload(file, folder=f"pqrs/{pqrs_id}")
+    stored = await storage_service.save_upload(
+        file, folder=f"pqrs/{pqrs_id}/productos/{producto_pqrs_id}"
+    )
     ev = pqrs_service.add_evidencia(
         db,
         pqrs_id=pqrs_id,
         archivo_url=stored.url,
         nombre_original=stored.original_name,
         content_type=stored.content_type,
+        producto_pqrs_id=producto_pqrs_id,
+        tipo=tipo,
         actor=actor,
         carga_inicial=carga_inicial,
     )
     return EvidenciaOut.model_validate(ev)
+
+
+@router.put("/{pqrs_id}/analisis-responsabilidad", response_model=AnalisisResponsabilidadOut)
+def guardar_analisis_responsabilidad(
+    pqrs_id: int,
+    data: AnalisisResponsabilidadUpsert,
+    db: Session = Depends(get_db),
+    actor: Usuario = Depends(get_current_user),
+):
+    analisis = pqrs_service.upsert_analisis_responsabilidad(db, pqrs_id, data, actor)
+    return _analisis_to_out(analisis)
+
+
+@router.put("/{pqrs_id}/satisfaccion-cliente", response_model=SatisfaccionClienteOut)
+def guardar_satisfaccion_cliente(
+    pqrs_id: int,
+    data: SatisfaccionClienteUpsert,
+    db: Session = Depends(get_db),
+    actor: Usuario = Depends(get_current_user),
+):
+    registro = pqrs_service.upsert_satisfaccion_cliente(db, pqrs_id, data, actor)
+    return _satisfaccion_to_out(registro)
 
 
 @router.post("/{pqrs_id}/notificar-calidad")
@@ -241,6 +277,28 @@ def _seg_to_out(seg) -> SeguimientoOut:
     )
 
 
+def _satisfaccion_to_out(registro) -> SatisfaccionClienteOut:
+    return SatisfaccionClienteOut(
+        id=registro.id,
+        atencion_oportunidad=registro.atencion_oportunidad,
+        expectativa_cumplida=registro.expectativa_cumplida,
+        usuario_id=registro.usuario_id,
+        usuario_nombre=registro.usuario.nombre if registro.usuario else None,
+        fecha_actualizacion=registro.fecha_actualizacion,
+    )
+
+
+def _analisis_to_out(analisis) -> AnalisisResponsabilidadOut:
+    return AnalisisResponsabilidadOut(
+        id=analisis.id,
+        procedente=analisis.procedente,
+        comentario=analisis.comentario,
+        usuario_id=analisis.usuario_id,
+        usuario_nombre=analisis.usuario.nombre if analisis.usuario else None,
+        fecha_actualizacion=analisis.fecha_actualizacion,
+    )
+
+
 def _to_detail(pqrs) -> PQRSDetail:
     from app.schemas.cliente import ClienteOut
     from app.schemas.inconformidad import InconformidadOut
@@ -249,6 +307,18 @@ def _to_detail(pqrs) -> PQRSDetail:
         ProductoPQRSOut,
         UsuarioMini,
     )
+
+    productos_out = []
+    for p in pqrs.productos:
+        prod = ProductoPQRSOut.model_validate(p)
+        prod.evidencias = [
+            EvidenciaOut.model_validate(e)
+            for e in sorted(
+                p.evidencias,
+                key=lambda x: (x.tipo or "", x.fecha_subida),
+            )
+        ]
+        productos_out.append(prod)
 
     return PQRSDetail(
         id=pqrs.id,
@@ -263,7 +333,17 @@ def _to_detail(pqrs) -> PQRSDetail:
         cliente=ClienteOut.model_validate(pqrs.cliente),
         inconformidad=InconformidadOut.model_validate(pqrs.inconformidad) if pqrs.inconformidad else None,
         vendedor=UsuarioMini.model_validate(pqrs.vendedor) if pqrs.vendedor else None,
-        productos=[ProductoPQRSOut.model_validate(p) for p in pqrs.productos],
+        productos=productos_out,
         evidencias=[EvidenciaOut.model_validate(e) for e in pqrs.evidencias],
         seguimientos=[_seg_to_out(s) for s in pqrs.seguimientos],
+        analisis_responsabilidad=(
+            _analisis_to_out(pqrs.analisis_responsabilidad)
+            if pqrs.analisis_responsabilidad
+            else None
+        ),
+        satisfaccion_cliente=(
+            _satisfaccion_to_out(pqrs.satisfaccion_cliente)
+            if pqrs.satisfaccion_cliente
+            else None
+        ),
     )

@@ -26,7 +26,8 @@ def run_alembic_upgrade() -> None:
         return
 
     cfg = Config(str(ini_path))
-    cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    # ConfigParser interpreta % como interpolación; escapar para contraseñas URL-encoded.
+    cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
     inspector = inspect(engine)
     tables = inspector.get_table_names()

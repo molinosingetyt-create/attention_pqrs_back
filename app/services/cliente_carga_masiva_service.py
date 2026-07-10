@@ -5,7 +5,6 @@ import unicodedata
 from io import BytesIO
 from typing import Any
 
-from email_validator import EmailNotValidError, validate_email
 from fastapi import HTTPException, UploadFile, status
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
@@ -15,6 +14,7 @@ from app.core.enums import RolUsuario
 from app.models.cliente import Cliente
 from app.models.usuario import Usuario
 from app.schemas.cliente_carga import ClienteCargaMasivaResultado, FilaCargaClienteResultado
+from app.schemas.common import normalize_app_email
 
 PLANTILLA_HEADERS = [
     "nombre",
@@ -65,15 +65,15 @@ def _parse_correo(raw: str) -> str | None:
     if not raw:
         return None
     try:
-        return validate_email(raw, check_deliverability=False).normalized
-    except EmailNotValidError as exc:
+        return normalize_app_email(raw)
+    except ValueError as exc:
         raise ValueError(f"Correo inválido: {raw}") from exc
 
 
-def _resolve_vendedor_exacto(db: Session, nombre_vendedor: str) -> Usuario:
+def _resolve_vendedor_opcional(db: Session, nombre_vendedor: str) -> Usuario | None:
     nombre = nombre_vendedor.strip()
     if not nombre:
-        raise ValueError("La columna 'vendedor' es obligatoria.")
+        return None
     rows = list(
         db.execute(
             select(Usuario).where(
@@ -199,6 +199,14 @@ def importar_clientes_excel(db: Session, file: UploadFile) -> ClienteCargaMasiva
                 raise ValueError("El NIT es obligatorio.")
             if len(nit) < 3:
                 raise ValueError("El NIT debe tener al menos 3 caracteres.")
+            if not data["direccion"]:
+                raise ValueError("La dirección es obligatoria.")
+            if not data["telefono"]:
+                raise ValueError("El teléfono es obligatorio.")
+            if not data["correo"]:
+                raise ValueError("El correo es obligatorio.")
+            if not data["ciudad"]:
+                raise ValueError("La ciudad es obligatoria.")
             if nit in nits_archivo:
                 raise ValueError(f"NIT duplicado en el archivo: {nit}")
             nits_archivo.add(nit)
@@ -209,29 +217,34 @@ def importar_clientes_excel(db: Session, file: UploadFile) -> ClienteCargaMasiva
             if exists:
                 raise ValueError(f"Ya existe un cliente con NIT {nit}.")
 
-            vendedor = _resolve_vendedor_exacto(db, data["vendedor"])
+            vendedor = _resolve_vendedor_opcional(db, data["vendedor"])
             correo = _parse_correo(data["correo"])
 
             cliente = Cliente(
                 nombre=data["nombre"],
                 apellidos=data["apellidos"] or None,
                 nit=nit,
-                direccion=data["direccion"] or None,
-                telefono=data["telefono"] or None,
+                direccion=data["direccion"],
+                telefono=data["telefono"],
                 correo=correo,
-                ciudad=data["ciudad"] or None,
-                vendedor_asignado_id=vendedor.id,
+                ciudad=data["ciudad"],
+                vendedor_asignado_id=vendedor.id if vendedor else None,
                 activo=True,
             )
             db.add(cliente)
             db.flush()
             creados += 1
+            mensaje = (
+                f"Cliente creado y asignado a {vendedor.nombre}."
+                if vendedor
+                else "Cliente creado sin vendedor asignado."
+            )
             resultados.append(
                 FilaCargaClienteResultado(
                     fila=row_num,
                     nit=nit,
                     exito=True,
-                    mensaje=f"Cliente creado y asignado a {vendedor.nombre}.",
+                    mensaje=mensaje,
                     cliente_id=cliente.id,
                 )
             )

@@ -280,7 +280,7 @@ def notify_quality_complaint_created(
             <tr><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-weight:700;">Cliente</td><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{_html_value(cliente)}</td></tr>
             <tr><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-weight:700;">Factura</td><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{_html_value(factura)}</td></tr>
             <tr><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-weight:700;">Lote</td><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{_html_value(lote)}</td></tr>
-            <tr><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-weight:700;">Inconformidad</td><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{_html_value(inconformidad)}</td></tr>
+            <tr><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-weight:700;">Motivo</td><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{_html_value(inconformidad)}</td></tr>
             <tr><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-weight:700;">Creación de la solicitud</td><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{_html_value(fecha_creacion)}</td></tr>
           </table>
 

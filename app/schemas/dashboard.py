@@ -25,10 +25,17 @@ class ConteoPorMes(BaseModel):
     cantidad: int
 
 
+class ConteoPorProductoCategoria(BaseModel):
+    categoria: str
+    producto: str
+    cantidad: int
+
+
 class DashboardResponse(BaseModel):
     kpis: KPIsDashboard
     por_tipo: list[ConteoPorTipo]
     por_estado: list[ConteoPorTipo]
     por_area: list[ConteoPorArea]
     por_mes: list[ConteoPorMes]
+    por_categoria_producto: list[ConteoPorProductoCategoria]
     recientes: list[dict]

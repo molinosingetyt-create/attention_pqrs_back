@@ -67,3 +67,17 @@ class PQRS(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    analisis_responsabilidad = relationship(
+        "PqrsAnalisisResponsabilidad",
+        back_populates="pqrs",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    satisfaccion_cliente = relationship(
+        "PqrsSatisfaccionCliente",
+        back_populates="pqrs",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )

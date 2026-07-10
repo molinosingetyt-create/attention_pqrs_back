@@ -2,7 +2,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.core.enums import EstadoPQRS, TipoPQRS
+from app.core.enums import (
+    CalificacionAtencion,
+    EstadoAnalisisResponsabilidad,
+    EstadoPQRS,
+    TipoEvidencia,
+    TipoPQRS,
+)
 from app.schemas.cliente import ClienteOut
 from app.schemas.inconformidad import InconformidadOut
 
@@ -23,11 +29,15 @@ class ProductoPQRSCreate(ProductoPQRSBase):
 class ProductoPQRSOut(ProductoPQRSBase):
     id: int
     categoria_nombre: str | None = None
+    evidencias: list["EvidenciaOut"] = []
     model_config = ConfigDict(from_attributes=True)
 
 
 class EvidenciaOut(BaseModel):
     id: int
+    producto_pqrs_id: int | None = None
+    tipo: TipoEvidencia | None = None
+    titulo: str | None = None
     archivo_url: str
     nombre_original: str | None = None
     content_type: str | None = None
@@ -49,6 +59,36 @@ class SeguimientoOut(SeguimientoBase):
     usuario_id: int | None = None
     usuario_nombre: str | None = None
     fecha: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AnalisisResponsabilidadUpsert(BaseModel):
+    procedente: bool
+    comentario: str = Field(..., min_length=1, max_length=5000)
+
+
+class AnalisisResponsabilidadOut(BaseModel):
+    id: int
+    procedente: bool
+    comentario: str
+    usuario_id: int | None = None
+    usuario_nombre: str | None = None
+    fecha_actualizacion: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SatisfaccionClienteUpsert(BaseModel):
+    atencion_oportunidad: CalificacionAtencion
+    expectativa_cumplida: bool
+
+
+class SatisfaccionClienteOut(BaseModel):
+    id: int
+    atencion_oportunidad: CalificacionAtencion
+    expectativa_cumplida: bool
+    usuario_id: int | None = None
+    usuario_nombre: str | None = None
+    fecha_actualizacion: datetime
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -108,6 +148,9 @@ class PQRSListItem(BaseModel):
     vendedor_nombre: str | None = None
     area_codigo: str | None = None
     area_nombre: str | None = None
+    estado_area_responsable: EstadoAnalisisResponsabilidad = (
+        EstadoAnalisisResponsabilidad.NO_GESTIONADO
+    )
     numero_factura: str | None = None
     fecha_creacion: datetime
     fecha_cierre: datetime | None = None
@@ -131,6 +174,8 @@ class PQRSDetail(BaseModel):
     productos: list[ProductoPQRSOut] = []
     evidencias: list[EvidenciaOut] = []
     seguimientos: list[SeguimientoOut] = []
+    analisis_responsabilidad: AnalisisResponsabilidadOut | None = None
+    satisfaccion_cliente: SatisfaccionClienteOut | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -144,3 +189,4 @@ class UsuarioMini(BaseModel):
 
 
 PQRSDetail.model_rebuild()
+ProductoPQRSOut.model_rebuild()

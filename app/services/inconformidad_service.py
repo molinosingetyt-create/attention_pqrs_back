@@ -32,7 +32,7 @@ def create_inconformidad(db: Session, data: InconformidadCreate) -> Inconformida
     if exists:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Ya existe una inconformidad con ese nombre en el mismo área.",
+            "Ya existe un motivo con ese nombre en el mismo área.",
         )
     inc = Inconformidad(
         area_id=data.area_id,
@@ -56,7 +56,7 @@ def update_inconformidad(db: Session, inc_id: int, data: InconformidadUpdate) ->
         .options(selectinload(Inconformidad.area))
     ).scalar_one_or_none()
     if not inc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Inconformidad no encontrada")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Motivo no encontrado")
     changes = data.model_dump(exclude_unset=True)
     if "area_id" in changes and changes["area_id"] is not None:
         area = db.get(Area, changes["area_id"])
@@ -83,6 +83,6 @@ def delete_inconformidad(db: Session, inc_id: int) -> None:
         select(Inconformidad).where(Inconformidad.id == inc_id)
     ).scalar_one_or_none()
     if not inc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Inconformidad no encontrada")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Motivo no encontrado")
     db.delete(inc)
     db.commit()

@@ -52,7 +52,7 @@ def delete_area(db: Session, area_id: int) -> None:
     if int(n) > 0:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "No se puede eliminar: hay inconformidades asociadas a esta área.",
+            "No se puede eliminar: hay motivos asociados a esta área.",
         )
     db.delete(a)
     db.commit()

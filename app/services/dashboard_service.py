@@ -5,8 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.core.enums import EstadoPQRS, RolUsuario
 from app.models.area import Area
+from app.models.categoria_producto import CategoriaProducto
 from app.models.cliente import Cliente
 from app.models.inconformidad import Inconformidad
+from app.models.producto_catalogo import ProductoCatalogo
+from app.models.producto_pqrs import ProductoPQRS
 from app.models.pqrs import PQRS
 from app.models.usuario import Usuario
 
@@ -40,7 +43,28 @@ def _add_months(dt: datetime, months: int) -> datetime:
     return dt.replace(year=y, month=m)
 
 
-def get_dashboard(db: Session, actor: Usuario | None = None) -> dict:
+def _aplicar_filtro_fechas(stmt, fecha_inicio: datetime | None, fecha_fin: datetime | None):
+    if fecha_inicio is not None:
+        inicio = fecha_inicio
+        if inicio.tzinfo is None:
+            inicio = inicio.replace(tzinfo=timezone.utc)
+        stmt = stmt.where(PQRS.fecha_creacion >= inicio)
+    if fecha_fin is not None:
+        fin = fecha_fin
+        if fin.tzinfo is None:
+            fin = fin.replace(tzinfo=timezone.utc)
+        fin = fin.replace(hour=23, minute=59, second=59, microsecond=999999)
+        stmt = stmt.where(PQRS.fecha_creacion <= fin)
+    return stmt
+
+
+def get_dashboard(
+    db: Session,
+    actor: Usuario | None = None,
+    *,
+    fecha_inicio: datetime | None = None,
+    fecha_fin: datetime | None = None,
+) -> dict:
     estados_stmt = _aplicar_scope_vendedor(
         select(PQRS.estado, func.count(PQRS.id)).group_by(PQRS.estado), actor
     )
@@ -116,6 +140,33 @@ def get_dashboard(db: Session, actor: Usuario | None = None) -> dict:
         for r in recientes_rows
     ]
 
+    por_categoria_producto_stmt = _aplicar_scope_vendedor(
+        select(
+            func.coalesce(CategoriaProducto.nombre, "Sin categoría").label("categoria"),
+            func.coalesce(ProductoCatalogo.nombre, ProductoPQRS.nombre_producto).label("producto"),
+            func.count(ProductoPQRS.id).label("cantidad"),
+        )
+        .select_from(ProductoPQRS)
+        .join(PQRS, PQRS.id == ProductoPQRS.pqrs_id)
+        .join(
+            ProductoCatalogo,
+            ProductoCatalogo.id == ProductoPQRS.producto_catalogo_id,
+            isouter=True,
+        )
+        .join(
+            CategoriaProducto,
+            CategoriaProducto.id == ProductoCatalogo.categoria_id,
+            isouter=True,
+        )
+        .group_by("categoria", "producto")
+        .order_by("categoria", func.count(ProductoPQRS.id).desc()),
+        actor,
+    )
+    por_categoria_producto_stmt = _aplicar_filtro_fechas(
+        por_categoria_producto_stmt, fecha_inicio, fecha_fin
+    )
+    por_categoria_producto_rows = db.execute(por_categoria_producto_stmt).all()
+
     return {
         "kpis": {
             "total": int(total),
@@ -130,5 +181,9 @@ def get_dashboard(db: Session, actor: Usuario | None = None) -> dict:
             {"area_codigo": a, "area_nombre": n, "cantidad": int(c)} for a, n, c in areas
         ],
         "por_mes": meses,
+        "por_categoria_producto": [
+            {"categoria": cat, "producto": prod, "cantidad": int(cant)}
+            for cat, prod, cant in por_categoria_producto_rows
+        ],
         "recientes": recientes,
     }

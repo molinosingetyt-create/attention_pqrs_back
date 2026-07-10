@@ -1,13 +1,14 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.enums import RolUsuario
+from app.schemas.common import AppEmailStr
 
 
 class UsuarioBase(BaseModel):
     nombre: str = Field(..., min_length=2, max_length=120)
-    email: EmailStr
+    email: AppEmailStr
     rol: RolUsuario
     activo: bool = True
 

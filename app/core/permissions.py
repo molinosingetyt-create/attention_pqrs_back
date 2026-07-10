@@ -68,7 +68,7 @@ PERMISSION_CATALOG: list[PermisoMeta] = [
     {"codigo": Permiso.USUARIOS_GESTIONAR, "modulo": "usuarios", "descripcion": "Gestionar usuarios del sistema"},
     {"codigo": Permiso.USUARIOS_LISTAR_VENDEDORES, "modulo": "usuarios", "descripcion": "Listar vendedores para asignación"},
     {"codigo": Permiso.CONFIG_GESTIONAR, "modulo": "configuracion", "descripcion": "Gestionar áreas, categorías y catálogo"},
-    {"codigo": Permiso.INCONFORMIDADES_GESTIONAR, "modulo": "inconformidades", "descripcion": "Crear y editar inconformidades"},
+    {"codigo": Permiso.INCONFORMIDADES_GESTIONAR, "modulo": "motivos", "descripcion": "Crear y editar motivos"},
     {"codigo": Permiso.PERMISOS_GESTIONAR, "modulo": "permisos", "descripcion": "Actualizar matriz de permisos por rol"},
 ]
 

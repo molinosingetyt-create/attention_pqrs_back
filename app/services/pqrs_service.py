@@ -8,7 +8,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.enums import EstadoPQRS, RolUsuario, TipoPQRS
+from app.core.enums import (
+    EstadoAnalisisResponsabilidad,
+    EstadoPQRS,
+    RolUsuario,
+    TIPOS_EVIDENCIA_LABELS,
+    TIPOS_EVIDENCIA_REQUERIDOS,
+    TipoEvidencia,
+    TipoPQRS,
+)
 from app.core.permissions import Permiso
 from app.services import permission_service
 from app.core.config import settings
@@ -16,11 +24,19 @@ from app.models.cliente import Cliente
 from app.models.evidencia import Evidencia
 from app.models.inconformidad import Inconformidad
 from app.models.pqrs import PQRS
+from app.models.pqrs_analisis_responsabilidad import PqrsAnalisisResponsabilidad
+from app.models.pqrs_satisfaccion_cliente import PqrsSatisfaccionCliente
 from app.models.producto_catalogo import ProductoCatalogo
 from app.models.producto_pqrs import ProductoPQRS
 from app.models.seguimiento import Seguimiento
 from app.models.usuario import Usuario
-from app.schemas.pqrs import PQRSCreate, PQRSUpdate, ProductoPQRSCreate
+from app.schemas.pqrs import (
+    AnalisisResponsabilidadUpsert,
+    PQRSCreate,
+    PQRSUpdate,
+    ProductoPQRSCreate,
+    SatisfaccionClienteUpsert,
+)
 from app.services import devolucion_service, email_service
 
 
@@ -35,6 +51,16 @@ _RADICADO_SUFFIX = {
 
 def _generar_radicado(pqrs_id: int, tipo: str) -> str:
     return f"RAD-{pqrs_id:06d}{_RADICADO_SUFFIX.get(tipo, 'O')}"
+
+
+def _estado_area_responsabilidad(
+    analisis: PqrsAnalisisResponsabilidad | None,
+) -> EstadoAnalisisResponsabilidad:
+    if analisis is None:
+        return EstadoAnalisisResponsabilidad.NO_GESTIONADO
+    if analisis.procedente:
+        return EstadoAnalisisResponsabilidad.PROCEDENTE
+    return EstadoAnalisisResponsabilidad.NO_PROCEDENTE
 
 
 def _producto_pqrs_desde_create(db: Session, p: ProductoPQRSCreate) -> ProductoPQRS:
@@ -71,9 +97,15 @@ def _get_pqrs_or_404(db: Session, pqrs_id: int) -> PQRS:
             selectinload(PQRS.cliente),
             selectinload(PQRS.inconformidad).selectinload(Inconformidad.area),
             selectinload(PQRS.vendedor),
-            selectinload(PQRS.productos),
+            selectinload(PQRS.productos).selectinload(ProductoPQRS.evidencias),
             selectinload(PQRS.evidencias),
             selectinload(PQRS.seguimientos).selectinload(Seguimiento.usuario),
+            selectinload(PQRS.analisis_responsabilidad).selectinload(
+                PqrsAnalisisResponsabilidad.usuario
+            ),
+            selectinload(PQRS.satisfaccion_cliente).selectinload(
+                PqrsSatisfaccionCliente.usuario
+            ),
         )
     ).scalar_one_or_none()
     if not pqrs:
@@ -141,6 +173,7 @@ def _notify_area_for_pqrs(db: Session, pqrs: PQRS) -> None:
 
 def notify_calidad_for_pqrs(db: Session, pqrs_id: int) -> None:
     pqrs = _get_pqrs_or_404(db, pqrs_id)
+    _validar_evidencias_productos_completas(pqrs)
     _notify_area_for_pqrs(db, pqrs)
 
 
@@ -206,6 +239,177 @@ def create_pqrs(db: Session, data: PQRSCreate, creador: Usuario) -> PQRS:
     return _get_pqrs_or_404(db, pqrs.id)
 
 
+def _puede_editar_pqrs(db: Session, actor: Usuario | None) -> bool:
+    if actor is None:
+        return False
+    return permission_service.usuario_tiene(db, actor, Permiso.PQRS_EDITAR)
+
+
+def _puede_subir_evidencia(
+    db: Session,
+    actor: Usuario | None,
+    pqrs: PQRS,
+    *,
+    carga_inicial: bool = False,
+) -> bool:
+    if actor is None:
+        return False
+    if permission_service.usuario_tiene(
+        db, actor, Permiso.PQRS_EVIDENCIA_SUBIR, Permiso.PQRS_EDITAR
+    ):
+        return True
+    if actor.rol == RolUsuario.VENDEDOR.value:
+        return (
+            carga_inicial
+            and pqrs.vendedor_id == actor.id
+            and pqrs.estado == EstadoPQRS.ABIERTA.value
+        )
+    return False
+
+
+def _validar_foto_imagen(content_type: str | None, nombre_original: str | None) -> None:
+    ct = (content_type or "").lower()
+    if ct.startswith("image/"):
+        return
+    ext = (nombre_original or "").rsplit(".", 1)[-1].lower() if nombre_original else ""
+    if ext in {"jpg", "jpeg", "png", "gif", "webp"}:
+        return
+    raise HTTPException(
+        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        "Las evidencias de producto deben ser archivos de imagen.",
+    )
+
+
+def _validar_evidencias_productos_completas(pqrs: PQRS) -> None:
+    if not pqrs.productos:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "La PQRS debe tener al menos un producto.",
+        )
+    faltantes: list[str] = []
+    for prod in pqrs.productos:
+        tipos = {
+            e.tipo
+            for e in prod.evidencias
+            if e.tipo in {t.value for t in TIPOS_EVIDENCIA_REQUERIDOS}
+        }
+        for tipo in TIPOS_EVIDENCIA_REQUERIDOS:
+            if tipo.value not in tipos:
+                faltantes.append(
+                    f"{prod.nombre_producto}: falta '{TIPOS_EVIDENCIA_LABELS[tipo]}'"
+                )
+    if faltantes:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Cada producto requiere las 2 fotos obligatorias. "
+            + "; ".join(faltantes),
+        )
+
+
+def _codigo_area_responsable(pqrs: PQRS) -> str | None:
+    if pqrs.inconformidad and pqrs.inconformidad.area:
+        return pqrs.inconformidad.area.codigo
+    return None
+
+
+def _exigir_area_responsable(actor: Usuario, pqrs: PQRS) -> None:
+    codigo = _codigo_area_responsable(pqrs)
+    if not codigo:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "La PQRS no tiene un motivo con área responsable asignada.",
+        )
+    if actor.rol != codigo:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Solo usuarios del área {codigo} pueden gestionar el análisis de responsabilidad.",
+        )
+
+
+def upsert_analisis_responsabilidad(
+    db: Session,
+    pqrs_id: int,
+    data: AnalisisResponsabilidadUpsert,
+    actor: Usuario,
+) -> PqrsAnalisisResponsabilidad:
+    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    _exigir_area_responsable(actor, pqrs)
+    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "La PQRS está cerrada o rechazada; no se puede modificar el análisis.",
+        )
+
+    comentario = data.comentario.strip()
+    if not comentario:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "El comentario del análisis es obligatorio.",
+        )
+
+    analisis = pqrs.analisis_responsabilidad
+    if analisis is None:
+        analisis = PqrsAnalisisResponsabilidad(
+            pqrs_id=pqrs.id,
+            procedente=data.procedente,
+            comentario=comentario,
+            usuario_id=actor.id,
+        )
+        db.add(analisis)
+    else:
+        analisis.procedente = data.procedente
+        analisis.comentario = comentario
+        analisis.usuario_id = actor.id
+        analisis.fecha_actualizacion = datetime.now(tz=timezone.utc)
+
+    db.commit()
+    db.refresh(analisis)
+    return analisis
+
+
+def upsert_satisfaccion_cliente(
+    db: Session,
+    pqrs_id: int,
+    data: SatisfaccionClienteUpsert,
+    actor: Usuario,
+) -> PqrsSatisfaccionCliente:
+    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "La PQRS está cerrada o rechazada; no se puede modificar la satisfacción.",
+        )
+    if not (
+        permission_service.usuario_tiene(
+            db, actor, Permiso.PQRS_SEGUIMIENTO_CREAR, Permiso.PQRS_EDITAR
+        )
+        or pqrs.vendedor_id == actor.id
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "No tienes permisos para registrar la satisfacción del cliente.",
+        )
+
+    registro = pqrs.satisfaccion_cliente
+    if registro is None:
+        registro = PqrsSatisfaccionCliente(
+            pqrs_id=pqrs.id,
+            atencion_oportunidad=data.atencion_oportunidad.value,
+            expectativa_cumplida=data.expectativa_cumplida,
+            usuario_id=actor.id,
+        )
+        db.add(registro)
+    else:
+        registro.atencion_oportunidad = data.atencion_oportunidad.value
+        registro.expectativa_cumplida = data.expectativa_cumplida
+        registro.usuario_id = actor.id
+        registro.fecha_actualizacion = datetime.now(tz=timezone.utc)
+
+    db.commit()
+    db.refresh(registro)
+    return registro
+
+
 def list_pqrs(
     db: Session,
     *,
@@ -221,7 +425,8 @@ def list_pqrs(
     actor: Usuario | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     if actor is not None and actor.rol == RolUsuario.VENDEDOR.value:
-        vendedor_id = actor.id
+        if not _puede_editar_pqrs(db, actor):
+            vendedor_id = actor.id
 
     stmt = (
         select(
@@ -235,6 +440,7 @@ def list_pqrs(
         .outerjoin(Inconformidad, Inconformidad.id == PQRS.inconformidad_id)
         .options(
             selectinload(PQRS.inconformidad).selectinload(Inconformidad.area),
+            selectinload(PQRS.analisis_responsabilidad),
         )
     )
     conditions = []
@@ -298,6 +504,9 @@ def list_pqrs(
                 "vendedor_nombre": row[3],
                 "area_codigo": inc_responsable.area.codigo if inc_responsable else None,
                 "area_nombre": inc_responsable.area.nombre if inc_responsable else None,
+                "estado_area_responsable": _estado_area_responsabilidad(
+                    pqrs.analisis_responsabilidad
+                ).value,
                 "numero_factura": pqrs.numero_factura,
                 "fecha_creacion": pqrs.fecha_creacion,
                 "fecha_cierre": pqrs.fecha_cierre,
@@ -312,6 +521,7 @@ def get_pqrs_detail(db: Session, pqrs_id: int, actor: Usuario | None = None) -> 
         actor is not None
         and actor.rol == RolUsuario.VENDEDOR.value
         and pqrs.vendedor_id != actor.id
+        and not _puede_editar_pqrs(db, actor)
     ):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -370,18 +580,11 @@ def update_pqrs(
     return _get_pqrs_or_404(db, pqrs.id)
 
 
-def _deny_if_vendedor(actor: Usuario | None) -> None:
-    if actor is not None and actor.rol == RolUsuario.VENDEDOR.value:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "El vendedor no puede modificar esta PQRS despu?s de creada.",
-        )
-
-
 def add_productos(
     db: Session, pqrs_id: int, productos: list[ProductoPQRSCreate], actor: Usuario | None = None
 ) -> list[ProductoPQRS]:
-    _deny_if_vendedor(actor)
+    if actor is not None:
+        permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
     pqrs = _get_pqrs_or_404(db, pqrs_id)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
@@ -403,7 +606,8 @@ def add_productos(
 def delete_producto(
     db: Session, pqrs_id: int, producto_id: int, actor: Usuario | None = None
 ) -> None:
-    _deny_if_vendedor(actor)
+    if actor is not None:
+        permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
     pqrs = _get_pqrs_or_404(db, pqrs_id)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
@@ -427,28 +631,51 @@ def add_evidencia(
     archivo_url: str,
     nombre_original: str | None,
     content_type: str | None,
+    *,
+    producto_pqrs_id: int,
+    tipo: TipoEvidencia,
     actor: Usuario | None = None,
     carga_inicial: bool = False,
 ) -> Evidencia:
     pqrs = _get_pqrs_or_404(db, pqrs_id)
-    if actor is not None and actor.rol == RolUsuario.VENDEDOR.value:
-        allowed_initial_upload = (
-            carga_inicial
-            and pqrs.vendedor_id == actor.id
-            and pqrs.estado == EstadoPQRS.ABIERTA.value
+    if not _puede_subir_evidencia(db, actor, pqrs, carga_inicial=carga_inicial):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "No tienes permisos para subir evidencias en esta PQRS.",
         )
-        if not allowed_initial_upload:
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                "El vendedor solo puede subir evidencias durante la creaci?n inicial de la PQRS.",
-            )
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS est? cerrada o rechazada; no se pueden subir evidencias.",
         )
+    if tipo not in TIPOS_EVIDENCIA_REQUERIDOS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Tipo de evidencia no v?lido.")
+
+    prod = db.execute(
+        select(ProductoPQRS).where(
+            ProductoPQRS.id == producto_pqrs_id,
+            ProductoPQRS.pqrs_id == pqrs_id,
+        )
+    ).scalar_one_or_none()
+    if not prod:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Producto no encontrado en esta PQRS.")
+
+    _validar_foto_imagen(content_type, nombre_original)
+
+    existing = db.execute(
+        select(Evidencia).where(
+            Evidencia.producto_pqrs_id == producto_pqrs_id,
+            Evidencia.tipo == tipo.value,
+        )
+    ).scalar_one_or_none()
+    if existing:
+        db.delete(existing)
+
     ev = Evidencia(
         pqrs_id=pqrs_id,
+        producto_pqrs_id=producto_pqrs_id,
+        tipo=tipo.value,
+        titulo=TIPOS_EVIDENCIA_LABELS[tipo],
         archivo_url=archivo_url,
         nombre_original=nombre_original,
         content_type=content_type,
