@@ -1,4 +1,4 @@
-"""Carga masiva de clientes desde Excel (solo administrador)."""
+"""Carga masiva de clientes desde Excel (crear o actualizar por NIT)."""
 from __future__ import annotations
 
 import unicodedata
@@ -185,6 +185,7 @@ def importar_clientes_excel(db: Session, file: UploadFile) -> ClienteCargaMasiva
     resultados: list[FilaCargaClienteResultado] = []
     nits_archivo: set[str] = set()
     creados = 0
+    actualizados = 0
 
     for row_num, row in enumerate(rows[1:], start=2):
         data = _row_dict(row, col_map)
@@ -211,34 +212,50 @@ def importar_clientes_excel(db: Session, file: UploadFile) -> ClienteCargaMasiva
                 raise ValueError(f"NIT duplicado en el archivo: {nit}")
             nits_archivo.add(nit)
 
-            exists = db.execute(
-                select(Cliente.id).where(Cliente.nit == nit)
-            ).scalar_one_or_none()
-            if exists:
-                raise ValueError(f"Ya existe un cliente con NIT {nit}.")
-
             vendedor = _resolve_vendedor_opcional(db, data["vendedor"])
             correo = _parse_correo(data["correo"])
 
-            cliente = Cliente(
-                nombre=data["nombre"],
-                apellidos=data["apellidos"] or None,
-                nit=nit,
-                direccion=data["direccion"],
-                telefono=data["telefono"],
-                correo=correo,
-                ciudad=data["ciudad"],
-                vendedor_asignado_id=vendedor.id if vendedor else None,
-                activo=True,
-            )
-            db.add(cliente)
-            db.flush()
-            creados += 1
-            mensaje = (
-                f"Cliente creado y asignado a {vendedor.nombre}."
-                if vendedor
-                else "Cliente creado sin vendedor asignado."
-            )
+            cliente = db.execute(
+                select(Cliente).where(Cliente.nit == nit)
+            ).scalar_one_or_none()
+
+            if cliente is None:
+                cliente = Cliente(
+                    nombre=data["nombre"],
+                    apellidos=data["apellidos"] or None,
+                    nit=nit,
+                    direccion=data["direccion"],
+                    telefono=data["telefono"],
+                    correo=correo,
+                    ciudad=data["ciudad"],
+                    vendedor_asignado_id=vendedor.id if vendedor else None,
+                    activo=True,
+                )
+                db.add(cliente)
+                db.flush()
+                creados += 1
+                mensaje = (
+                    f"Cliente creado y asignado a {vendedor.nombre}."
+                    if vendedor
+                    else "Cliente creado sin vendedor asignado."
+                )
+            else:
+                cliente.nombre = data["nombre"]
+                cliente.apellidos = data["apellidos"] or None
+                cliente.direccion = data["direccion"]
+                cliente.telefono = data["telefono"]
+                cliente.correo = correo
+                cliente.ciudad = data["ciudad"]
+                # Si el Excel trae vendedor, se reasigna; si viene vacío, se conserva
+                if vendedor is not None:
+                    cliente.vendedor_asignado_id = vendedor.id
+                db.flush()
+                actualizados += 1
+                if vendedor is not None:
+                    mensaje = f"Cliente actualizado y asignado a {vendedor.nombre}."
+                else:
+                    mensaje = "Cliente actualizado."
+
             resultados.append(
                 FilaCargaClienteResultado(
                     fila=row_num,
@@ -263,6 +280,7 @@ def importar_clientes_excel(db: Session, file: UploadFile) -> ClienteCargaMasiva
     return ClienteCargaMasivaResultado(
         total_filas=len(resultados),
         creados=creados,
+        actualizados=actualizados,
         errores=errores,
         filas=resultados,
     )

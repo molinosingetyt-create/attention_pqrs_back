@@ -12,5 +12,6 @@ class FilaCargaClienteResultado(BaseModel):
 class ClienteCargaMasivaResultado(BaseModel):
     total_filas: int
     creados: int
+    actualizados: int = 0
     errores: int
     filas: list[FilaCargaClienteResultado] = Field(default_factory=list)
