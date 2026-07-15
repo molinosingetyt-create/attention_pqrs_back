@@ -26,6 +26,7 @@ from app.schemas.pqrs import (
     SeguimientoOut,
 )
 from app.services import pqrs_service, storage_service
+from app.services import pqrs_pdf_service
 
 
 router = APIRouter(
@@ -163,6 +164,26 @@ def detalle(
     actor: Usuario = Depends(get_current_user),
 ):
     return _to_detail(pqrs_service.get_pqrs_detail(db, pqrs_id, actor=actor))
+
+
+@router.get(
+    "/{pqrs_id}/pdf",
+    dependencies=[Depends(require_permission(Permiso.PQRS_VER))],
+)
+def descargar_pdf_pqrs(
+    pqrs_id: int,
+    db: Session = Depends(get_db),
+    actor: Usuario = Depends(get_current_user),
+):
+    """PDF único (2 páginas): Formato PQRS + Autorización de devoluciones."""
+    content, filename = pqrs_pdf_service.generar_documento_pqrs_pdf(
+        db, pqrs_id, actor=actor
+    )
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put(

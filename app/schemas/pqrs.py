@@ -6,6 +6,7 @@ from app.core.enums import (
     CalificacionAtencion,
     EstadoAnalisisResponsabilidad,
     EstadoPQRS,
+    TIPOS_PRODUCTO_MOTIVO_OPCIONALES,
     TipoEvidencia,
     TipoPQRS,
 )
@@ -112,7 +113,7 @@ class PQRSBase(BaseModel):
     cliente_id: int
     vendedor_id: int | None = None
     tipo: TipoPQRS
-    inconformidad_id: int
+    inconformidad_id: int | None = None
     numero_factura: str | None = Field(None, max_length=60)
     lote: str | None = Field(None, max_length=60)
     descripcion: str | None = None
@@ -122,8 +123,11 @@ class PQRSCreate(PQRSBase):
     productos: list[ProductoPQRSCreate] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validar_productos(self):
-        if not self.productos:
+    def _validar_producto_y_motivo(self):
+        opcional = self.tipo in TIPOS_PRODUCTO_MOTIVO_OPCIONALES
+        if not opcional and self.inconformidad_id is None:
+            raise ValueError("El motivo es obligatorio para este tipo de PQRS.")
+        if not opcional and not self.productos:
             raise ValueError("Debe registrar al menos un producto.")
         return self
 

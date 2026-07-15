@@ -17,6 +17,12 @@ class TipoPQRS(str, Enum):
     OTRO = "OTRO"
 
 
+# En estos tipos, producto e inconformidad/motivo son opcionales.
+TIPOS_PRODUCTO_MOTIVO_OPCIONALES: frozenset[TipoPQRS] = frozenset(
+    {TipoPQRS.QUEJA, TipoPQRS.SUGERENCIA, TipoPQRS.OTRO}
+)
+
+
 class EstadoPQRS(str, Enum):
     ABIERTA = "ABIERTA"
     EN_PROCESO = "EN_PROCESO"

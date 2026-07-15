@@ -14,6 +14,7 @@ from app.core.enums import (
     RolUsuario,
     TIPOS_EVIDENCIA_LABELS,
     TIPOS_EVIDENCIA_REQUERIDOS,
+    TIPOS_PRODUCTO_MOTIVO_OPCIONALES,
     TipoEvidencia,
     TipoPQRS,
 )
@@ -281,7 +282,10 @@ def _validar_foto_imagen(content_type: str | None, nombre_original: str | None) 
 
 
 def _validar_evidencias_productos_completas(pqrs: PQRS) -> None:
+    tipo = pqrs.tipo if isinstance(pqrs.tipo, TipoPQRS) else TipoPQRS(pqrs.tipo)
     if not pqrs.productos:
+        if tipo in TIPOS_PRODUCTO_MOTIVO_OPCIONALES:
+            return
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS debe tener al menos un producto.",
@@ -293,10 +297,10 @@ def _validar_evidencias_productos_completas(pqrs: PQRS) -> None:
             for e in prod.evidencias
             if e.tipo in {t.value for t in TIPOS_EVIDENCIA_REQUERIDOS}
         }
-        for tipo in TIPOS_EVIDENCIA_REQUERIDOS:
-            if tipo.value not in tipos:
+        for tipo_ev in TIPOS_EVIDENCIA_REQUERIDOS:
+            if tipo_ev.value not in tipos:
                 faltantes.append(
-                    f"{prod.nombre_producto}: falta '{TIPOS_EVIDENCIA_LABELS[tipo]}'"
+                    f"{prod.nombre_producto}: falta '{TIPOS_EVIDENCIA_LABELS[tipo_ev]}'"
                 )
     if faltantes:
         raise HTTPException(
