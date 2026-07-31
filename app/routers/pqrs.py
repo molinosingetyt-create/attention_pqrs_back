@@ -21,6 +21,7 @@ from app.schemas.pqrs import (
     PQRSUpdate,
     ProductoPQRSCreate,
     ProductoPQRSOut,
+    ProductoPQRSUpdate,
     SatisfaccionClienteOut,
     SatisfaccionClienteUpsert,
     SeguimientoOut,
@@ -212,6 +213,31 @@ def agregar_productos(
     return [ProductoPQRSOut.model_validate(p) for p in creados]
 
 
+@router.put(
+    "/{pqrs_id}/productos/{producto_id}",
+    response_model=ProductoPQRSOut,
+    dependencies=[Depends(require_permission(Permiso.PQRS_EDITAR))],
+)
+def actualizar_producto(
+    pqrs_id: int,
+    producto_id: int,
+    data: ProductoPQRSUpdate,
+    db: Session = Depends(get_db),
+    actor: Usuario = Depends(get_current_user),
+):
+    prod = pqrs_service.update_producto(db, pqrs_id, producto_id, data, actor)
+    out = ProductoPQRSOut.model_validate(prod)
+    if prod.producto_catalogo:
+        out.categoria_id = prod.producto_catalogo.categoria_id
+        if prod.producto_catalogo.categoria:
+            out.categoria_nombre = prod.producto_catalogo.categoria.nombre
+    out.evidencias = [
+        EvidenciaOut.model_validate(e)
+        for e in sorted(prod.evidencias, key=lambda x: (x.tipo or "", x.fecha_subida))
+    ]
+    return out
+
+
 @router.delete("/{pqrs_id}/productos/{producto_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_producto(
     pqrs_id: int,
@@ -332,6 +358,10 @@ def _to_detail(pqrs) -> PQRSDetail:
     productos_out = []
     for p in pqrs.productos:
         prod = ProductoPQRSOut.model_validate(p)
+        if p.producto_catalogo:
+            prod.categoria_id = p.producto_catalogo.categoria_id
+            if p.producto_catalogo.categoria:
+                prod.categoria_nombre = p.producto_catalogo.categoria.nombre
         prod.evidencias = [
             EvidenciaOut.model_validate(e)
             for e in sorted(

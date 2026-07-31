@@ -36,6 +36,7 @@ from app.schemas.pqrs import (
     PQRSCreate,
     PQRSUpdate,
     ProductoPQRSCreate,
+    ProductoPQRSUpdate,
     SatisfaccionClienteUpsert,
 )
 from app.services import devolucion_service, email_service
@@ -98,7 +99,11 @@ def _get_pqrs_or_404(db: Session, pqrs_id: int) -> PQRS:
             selectinload(PQRS.cliente),
             selectinload(PQRS.inconformidad).selectinload(Inconformidad.area),
             selectinload(PQRS.vendedor),
-            selectinload(PQRS.productos).selectinload(ProductoPQRS.evidencias),
+            selectinload(PQRS.productos)
+            .selectinload(ProductoPQRS.evidencias),
+            selectinload(PQRS.productos)
+            .selectinload(ProductoPQRS.producto_catalogo)
+            .selectinload(ProductoCatalogo.categoria),
             selectinload(PQRS.evidencias),
             selectinload(PQRS.seguimientos).selectinload(Seguimiento.usuario),
             selectinload(PQRS.analisis_responsabilidad).selectinload(
@@ -607,6 +612,87 @@ def add_productos(
     return creados
 
 
+def update_producto(
+    db: Session,
+    pqrs_id: int,
+    producto_id: int,
+    data: ProductoPQRSUpdate,
+    actor: Usuario,
+) -> ProductoPQRS:
+    permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
+    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "La PQRS está cerrada o rechazada; no se pueden modificar productos.",
+        )
+    prod = db.execute(
+        select(ProductoPQRS)
+        .where(ProductoPQRS.id == producto_id, ProductoPQRS.pqrs_id == pqrs_id)
+        .options(
+            selectinload(ProductoPQRS.evidencias),
+            selectinload(ProductoPQRS.producto_catalogo).selectinload(
+                ProductoCatalogo.categoria
+            ),
+        )
+    ).scalar_one_or_none()
+    if not prod:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Producto no encontrado")
+
+    changes = data.model_dump(exclude_unset=True)
+    if "producto_catalogo_id" in changes and changes["producto_catalogo_id"] is not None:
+        pc = db.get(ProductoCatalogo, changes["producto_catalogo_id"])
+        if not pc or not pc.activo:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Producto de catálogo no válido o inactivo.",
+            )
+        if prod.producto_catalogo_id != pc.id:
+            for ev in list(prod.evidencias):
+                db.delete(ev)
+            prod.producto_catalogo_id = pc.id
+            prod.nombre_producto = pc.nombre
+    if "cantidad" in changes and changes["cantidad"] is not None:
+        prod.cantidad = changes["cantidad"]
+    if "numero_factura" in changes and changes["numero_factura"] is not None:
+        prod.numero_factura = changes["numero_factura"].strip() or None
+    if "lote" in changes and changes["lote"] is not None:
+        prod.lote = changes["lote"].strip() or None
+    if "comentario" in changes:
+        comentario = changes["comentario"]
+        prod.comentario = (comentario.strip() or None) if isinstance(comentario, str) else None
+
+    # Mantener cabecera alineada con el primer producto si se edita ese.
+    primer = (
+        db.execute(
+            select(ProductoPQRS)
+            .where(ProductoPQRS.pqrs_id == pqrs_id)
+            .order_by(ProductoPQRS.id.asc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    if primer and primer.id == prod.id:
+        if prod.numero_factura:
+            pqrs.numero_factura = prod.numero_factura
+        if prod.lote:
+            pqrs.lote = prod.lote
+
+    db.commit()
+    prod = db.execute(
+        select(ProductoPQRS)
+        .where(ProductoPQRS.id == producto_id, ProductoPQRS.pqrs_id == pqrs_id)
+        .options(
+            selectinload(ProductoPQRS.evidencias),
+            selectinload(ProductoPQRS.producto_catalogo).selectinload(
+                ProductoCatalogo.categoria
+            ),
+        )
+    ).scalar_one()
+    return prod
+
+
 def delete_producto(
     db: Session, pqrs_id: int, producto_id: int, actor: Usuario | None = None
 ) -> None:
@@ -616,7 +702,13 @@ def delete_producto(
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "La PQRS est? cerrada o rechazada; no se pueden eliminar productos.",
+            "La PQRS está cerrada o rechazada; no se pueden eliminar productos.",
+        )
+    tipo = pqrs.tipo if isinstance(pqrs.tipo, TipoPQRS) else TipoPQRS(pqrs.tipo)
+    if tipo not in TIPOS_PRODUCTO_MOTIVO_OPCIONALES and len(pqrs.productos) <= 1:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Esta PQRS requiere al menos un producto; no se puede eliminar el último.",
         )
     prod = db.execute(
         select(ProductoPQRS).where(

@@ -27,8 +27,17 @@ class ProductoPQRSCreate(ProductoPQRSBase):
     pass
 
 
+class ProductoPQRSUpdate(BaseModel):
+    producto_catalogo_id: int | None = None
+    cantidad: float | None = Field(None, gt=0)
+    numero_factura: str | None = Field(None, min_length=1, max_length=60)
+    lote: str | None = Field(None, min_length=1, max_length=60)
+    comentario: str | None = Field(None, max_length=1000)
+
+
 class ProductoPQRSOut(ProductoPQRSBase):
     id: int
+    categoria_id: int | None = None
     categoria_nombre: str | None = None
     evidencias: list["EvidenciaOut"] = []
     model_config = ConfigDict(from_attributes=True)
