@@ -88,14 +88,16 @@ class AnalisisResponsabilidadOut(BaseModel):
 
 
 class SatisfaccionClienteUpsert(BaseModel):
-    atencion_oportunidad: CalificacionAtencion
+    atencion_oportunidad: CalificacionAtencion | None = None
     expectativa_cumplida: bool
+    comentarios: str | None = Field(None, max_length=2000)
 
 
 class SatisfaccionClienteOut(BaseModel):
     id: int
-    atencion_oportunidad: CalificacionAtencion
+    atencion_oportunidad: CalificacionAtencion | None = None
     expectativa_cumplida: bool
+    comentarios: str | None = None
     usuario_id: int | None = None
     usuario_nombre: str | None = None
     fecha_actualizacion: datetime
@@ -161,12 +163,35 @@ class PQRSListItem(BaseModel):
     vendedor_nombre: str | None = None
     area_codigo: str | None = None
     area_nombre: str | None = None
+    inconformidad_id: int | None = None
+    inconformidad_nombre: str | None = None
     estado_area_responsable: EstadoAnalisisResponsabilidad = (
         EstadoAnalisisResponsabilidad.NO_GESTIONADO
     )
     numero_factura: str | None = None
     fecha_creacion: datetime
     fecha_cierre: datetime | None = None
+
+
+class AreaFiltroOut(BaseModel):
+    id: int
+    codigo: str
+    nombre: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InconformidadFiltroOut(BaseModel):
+    id: int
+    nombre: str
+    area_id: int
+    area_nombre: str | None = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PQRSOpcionesFiltro(BaseModel):
+    ciudades: list[str]
+    areas: list[AreaFiltroOut]
+    inconformidades: list[InconformidadFiltroOut]
 
 
 class PQRSDetail(BaseModel):

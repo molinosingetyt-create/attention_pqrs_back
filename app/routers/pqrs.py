@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
-from app.core.enums import EstadoPQRS, TipoEvidencia, TipoPQRS
+from app.core.enums import EstadoAnalisisResponsabilidad, EstadoPQRS, TipoEvidencia, TipoPQRS
 from app.core.permissions import Permiso
 from app.models.usuario import Usuario
 from app.schemas.common import Page
@@ -18,6 +18,7 @@ from app.schemas.pqrs import (
     PQRSCreate,
     PQRSDetail,
     PQRSListItem,
+    PQRSOpcionesFiltro,
     PQRSUpdate,
     ProductoPQRSCreate,
     ProductoPQRSOut,
@@ -58,6 +59,9 @@ def listar_pqrs(
     tipo: TipoPQRS | None = Query(None),
     cliente_id: int | None = Query(None),
     vendedor_id: int | None = Query(None),
+    ciudad: str | None = Query(None),
+    estado_area_responsable: EstadoAnalisisResponsabilidad | None = Query(None),
+    inconformidad_id: int | None = Query(None),
     q: str | None = Query(None),
     fecha_desde: datetime | None = Query(None),
     fecha_hasta: datetime | None = Query(None),
@@ -72,6 +76,9 @@ def listar_pqrs(
         tipo=tipo,
         cliente_id=cliente_id,
         vendedor_id=vendedor_id,
+        ciudad=ciudad,
+        estado_area_responsable=estado_area_responsable,
+        inconformidad_id=inconformidad_id,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
         q=q,
@@ -88,12 +95,23 @@ def listar_pqrs(
     )
 
 
+@router.get("/opciones-filtro", response_model=PQRSOpcionesFiltro)
+def opciones_filtro_pqrs(
+    db: Session = Depends(get_db),
+    actor: Usuario = Depends(get_current_user),
+):
+    return pqrs_service.opciones_filtro_listado(db, actor)
+
+
 @router.get("/export")
 def exportar_pqrs(
     estado: EstadoPQRS | None = Query(None),
     tipo: TipoPQRS | None = Query(None),
     cliente_id: int | None = Query(None),
     vendedor_id: int | None = Query(None),
+    ciudad: str | None = Query(None),
+    estado_area_responsable: EstadoAnalisisResponsabilidad | None = Query(None),
+    inconformidad_id: int | None = Query(None),
     q: str | None = Query(None),
     fecha_desde: datetime | None = Query(None),
     fecha_hasta: datetime | None = Query(None),
@@ -109,6 +127,9 @@ def exportar_pqrs(
         tipo=tipo,
         cliente_id=cliente_id,
         vendedor_id=vendedor_id,
+        ciudad=ciudad,
+        estado_area_responsable=estado_area_responsable,
+        inconformidad_id=inconformidad_id,
         q=q,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
@@ -127,6 +148,7 @@ def exportar_pqrs(
             "Cliente",
             "Vendedor",
             "Área responsable",
+            "Motivo",
             "Estado área resp.",
             "Factura",
             "Fecha creación",
@@ -142,6 +164,7 @@ def exportar_pqrs(
                 it["cliente_nombre"],
                 it["vendedor_nombre"],
                 it["area_nombre"] or "",
+                it["inconformidad_nombre"] or "",
                 it["estado_area_responsable"],
                 it["numero_factura"] or "",
                 it["fecha_creacion"].strftime("%Y-%m-%d %H:%M") if it["fecha_creacion"] else "",
@@ -185,6 +208,19 @@ def descargar_pdf_pqrs(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.delete(
+    "/{pqrs_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permiso.PQRS_ELIMINAR))],
+)
+def eliminar_pqrs(
+    pqrs_id: int,
+    db: Session = Depends(get_db),
+    actor: Usuario = Depends(get_current_user),
+):
+    pqrs_service.delete_pqrs(db, pqrs_id, actor)
 
 
 @router.put(
@@ -329,6 +365,7 @@ def _satisfaccion_to_out(registro) -> SatisfaccionClienteOut:
         id=registro.id,
         atencion_oportunidad=registro.atencion_oportunidad,
         expectativa_cumplida=registro.expectativa_cumplida,
+        comentarios=registro.comentarios,
         usuario_id=registro.usuario_id,
         usuario_nombre=registro.usuario.nombre if registro.usuario else None,
         fecha_actualizacion=registro.fecha_actualizacion,

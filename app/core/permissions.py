@@ -30,6 +30,7 @@ class Permiso:
     PQRS_CREAR = "pqrs.crear"
     PQRS_VER = "pqrs.ver"
     PQRS_EDITAR = "pqrs.editar"
+    PQRS_ELIMINAR = "pqrs.eliminar"
     PQRS_EXPORTAR = "pqrs.exportar"
     PQRS_SEGUIMIENTO_CREAR = "pqrs.seguimiento.crear"
     PQRS_EVIDENCIA_SUBIR = "pqrs.evidencia.subir"
@@ -59,6 +60,7 @@ PERMISSION_CATALOG: list[PermisoMeta] = [
     {"codigo": Permiso.PQRS_CREAR, "modulo": "pqrs", "descripcion": "Crear PQRS"},
     {"codigo": Permiso.PQRS_VER, "modulo": "pqrs", "descripcion": "Ver detalle de PQRS"},
     {"codigo": Permiso.PQRS_EDITAR, "modulo": "pqrs", "descripcion": "Editar PQRS"},
+    {"codigo": Permiso.PQRS_ELIMINAR, "modulo": "pqrs", "descripcion": "Eliminar PQRS"},
     {"codigo": Permiso.PQRS_EXPORTAR, "modulo": "pqrs", "descripcion": "Exportar PQRS a Excel"},
     {"codigo": Permiso.PQRS_SEGUIMIENTO_CREAR, "modulo": "pqrs", "descripcion": "Registrar seguimiento en historial"},
     {"codigo": Permiso.PQRS_EVIDENCIA_SUBIR, "modulo": "pqrs", "descripcion": "Subir evidencias a PQRS"},

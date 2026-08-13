@@ -105,3 +105,15 @@ def sembrar_defaults(db: Session) -> None:
         for code in perms:
             db.add(RolPermiso(rol=rol, permiso=code))
     db.commit()
+
+
+def asegurar_permisos_administrador(db: Session) -> None:
+    """Otorga al administrador cualquier permiso nuevo del catálogo."""
+    rol = RolUsuario.ADMINISTRADOR.value
+    actuales = set(permisos_de_rol_en_db(db, rol) or [])
+    faltantes = ALL_PERMISSION_CODES - actuales
+    if not faltantes:
+        return
+    for code in sorted(faltantes):
+        db.add(RolPermiso(rol=rol, permiso=code))
+    db.commit()

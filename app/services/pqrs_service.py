@@ -21,6 +21,7 @@ from app.core.enums import (
 from app.core.permissions import Permiso
 from app.services import permission_service
 from app.core.config import settings
+from app.models.area import Area
 from app.models.cliente import Cliente
 from app.models.evidencia import Evidencia
 from app.models.inconformidad import Inconformidad
@@ -400,19 +401,23 @@ def upsert_satisfaccion_cliente(
         )
 
     registro = pqrs.satisfaccion_cliente
-    if registro is None:
-        registro = PqrsSatisfaccionCliente(
-            pqrs_id=pqrs.id,
-            atencion_oportunidad=data.atencion_oportunidad.value,
-            expectativa_cumplida=data.expectativa_cumplida,
-            usuario_id=actor.id,
+    if registro is not None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "La satisfacción del cliente ya fue registrada y no se puede modificar.",
         )
-        db.add(registro)
-    else:
-        registro.atencion_oportunidad = data.atencion_oportunidad.value
-        registro.expectativa_cumplida = data.expectativa_cumplida
-        registro.usuario_id = actor.id
-        registro.fecha_actualizacion = datetime.now(tz=timezone.utc)
+
+    comentarios = (data.comentarios or "").strip() or None
+    registro = PqrsSatisfaccionCliente(
+        pqrs_id=pqrs.id,
+        atencion_oportunidad=(
+            data.atencion_oportunidad.value if data.atencion_oportunidad else None
+        ),
+        expectativa_cumplida=data.expectativa_cumplida,
+        comentarios=comentarios,
+        usuario_id=actor.id,
+    )
+    db.add(registro)
 
     db.commit()
     db.refresh(registro)
@@ -426,6 +431,9 @@ def list_pqrs(
     tipo: TipoPQRS | None = None,
     cliente_id: int | None = None,
     vendedor_id: int | None = None,
+    ciudad: str | None = None,
+    estado_area_responsable: EstadoAnalisisResponsabilidad | None = None,
+    inconformidad_id: int | None = None,
     fecha_desde: datetime | None = None,
     fecha_hasta: datetime | None = None,
     q: str | None = None,
@@ -447,6 +455,10 @@ def list_pqrs(
         .join(Cliente, Cliente.id == PQRS.cliente_id)
         .outerjoin(Usuario, Usuario.id == PQRS.vendedor_id)
         .outerjoin(Inconformidad, Inconformidad.id == PQRS.inconformidad_id)
+        .outerjoin(
+            PqrsAnalisisResponsabilidad,
+            PqrsAnalisisResponsabilidad.pqrs_id == PQRS.id,
+        )
         .options(
             selectinload(PQRS.inconformidad).selectinload(Inconformidad.area),
             selectinload(PQRS.analisis_responsabilidad),
@@ -461,6 +473,17 @@ def list_pqrs(
         conditions.append(PQRS.cliente_id == cliente_id)
     if vendedor_id:
         conditions.append(PQRS.vendedor_id == vendedor_id)
+    if ciudad and ciudad.strip():
+        conditions.append(func.lower(func.trim(Cliente.ciudad)) == ciudad.strip().lower())
+    if estado_area_responsable:
+        if estado_area_responsable == EstadoAnalisisResponsabilidad.NO_GESTIONADO:
+            conditions.append(PqrsAnalisisResponsabilidad.id.is_(None))
+        elif estado_area_responsable == EstadoAnalisisResponsabilidad.PROCEDENTE:
+            conditions.append(PqrsAnalisisResponsabilidad.procedente.is_(True))
+        else:
+            conditions.append(PqrsAnalisisResponsabilidad.procedente.is_(False))
+    if inconformidad_id:
+        conditions.append(PQRS.inconformidad_id == inconformidad_id)
     if fecha_desde:
         conditions.append(PQRS.fecha_creacion >= fecha_desde)
     if fecha_hasta:
@@ -479,13 +502,17 @@ def list_pqrs(
     if conditions:
         stmt = stmt.where(and_(*conditions))
 
-    count_stmt = select(func.count(PQRS.id))
+    count_stmt = select(func.count(PQRS.id)).select_from(PQRS)
     if conditions:
         count_stmt = (
-            select(func.count(PQRS.id))
-            .select_from(PQRS)
+            count_stmt
             .join(Cliente, Cliente.id == PQRS.cliente_id)
             .outerjoin(Usuario, Usuario.id == PQRS.vendedor_id)
+            .outerjoin(Inconformidad, Inconformidad.id == PQRS.inconformidad_id)
+            .outerjoin(
+                PqrsAnalisisResponsabilidad,
+                PqrsAnalisisResponsabilidad.pqrs_id == PQRS.id,
+            )
             .where(and_(*conditions))
         )
     total = int(db.execute(count_stmt).scalar_one())
@@ -513,6 +540,8 @@ def list_pqrs(
                 "vendedor_nombre": row[3],
                 "area_codigo": inc_responsable.area.codigo if inc_responsable else None,
                 "area_nombre": inc_responsable.area.nombre if inc_responsable else None,
+                "inconformidad_id": inc_responsable.id if inc_responsable else None,
+                "inconformidad_nombre": inc_responsable.nombre if inc_responsable else None,
                 "estado_area_responsable": _estado_area_responsabilidad(
                     pqrs.analisis_responsabilidad
                 ).value,
@@ -522,6 +551,56 @@ def list_pqrs(
             }
         )
     return items, total
+
+
+def opciones_filtro_listado(
+    db: Session, actor: Usuario | None = None
+) -> dict[str, Any]:
+    ciudades_stmt = (
+        select(func.min(Cliente.ciudad))
+        .join(PQRS, PQRS.cliente_id == Cliente.id)
+        .where(
+            Cliente.ciudad.is_not(None),
+            func.trim(Cliente.ciudad) != "",
+        )
+        .group_by(func.lower(func.trim(Cliente.ciudad)))
+        .order_by(func.min(Cliente.ciudad))
+    )
+    if (
+        actor is not None
+        and actor.rol == RolUsuario.VENDEDOR.value
+        and not _puede_editar_pqrs(db, actor)
+    ):
+        ciudades_stmt = ciudades_stmt.where(PQRS.vendedor_id == actor.id)
+
+    ciudades = [
+        c.strip()
+        for c in db.execute(ciudades_stmt).scalars().all()
+        if c and c.strip()
+    ]
+    areas = list(db.execute(select(Area).order_by(Area.nombre.asc())).scalars())
+    inconformidades = list(
+        db.execute(
+            select(Inconformidad)
+            .options(selectinload(Inconformidad.area))
+            .join(Inconformidad.area)
+            .where(Inconformidad.activo.is_(True))
+            .order_by(Area.nombre.asc(), Inconformidad.nombre.asc())
+        ).scalars()
+    )
+    return {
+        "ciudades": ciudades,
+        "areas": [{"id": a.id, "codigo": a.codigo, "nombre": a.nombre} for a in areas],
+        "inconformidades": [
+            {
+                "id": i.id,
+                "nombre": i.nombre,
+                "area_id": i.area_id,
+                "area_nombre": i.area.nombre if i.area else None,
+            }
+            for i in inconformidades
+        ],
+    }
 
 
 def get_pqrs_detail(db: Session, pqrs_id: int, actor: Usuario | None = None) -> PQRS:
@@ -721,6 +800,13 @@ def delete_producto(
     db.commit()
 
 
+def delete_pqrs(db: Session, pqrs_id: int, actor: Usuario) -> None:
+    permission_service.exigir_permiso(db, actor, Permiso.PQRS_ELIMINAR)
+    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    db.delete(pqrs)
+    db.commit()
+
+
 def add_evidencia(
     db: Session,
     pqrs_id: int,
@@ -742,10 +828,10 @@ def add_evidencia(
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "La PQRS est? cerrada o rechazada; no se pueden subir evidencias.",
+            "La PQRS está cerrada o rechazada; no se pueden subir evidencias.",
         )
     if tipo not in TIPOS_EVIDENCIA_REQUERIDOS:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Tipo de evidencia no v?lido.")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Tipo de evidencia no válido.")
 
     prod = db.execute(
         select(ProductoPQRS).where(
@@ -758,14 +844,24 @@ def add_evidencia(
 
     _validar_foto_imagen(content_type, nombre_original)
 
+    # Un producto solo puede tener una foto por tipo (uq_evidencia_producto_tipo).
+    # Si ya existe, se actualiza en sitio para evitar violación de integridad.
     existing = db.execute(
         select(Evidencia).where(
             Evidencia.producto_pqrs_id == producto_pqrs_id,
             Evidencia.tipo == tipo.value,
         )
     ).scalar_one_or_none()
+
     if existing:
-        db.delete(existing)
+        existing.archivo_url = archivo_url
+        existing.nombre_original = nombre_original
+        existing.content_type = content_type
+        existing.titulo = TIPOS_EVIDENCIA_LABELS[tipo]
+        existing.fecha_subida = datetime.now(tz=timezone.utc)
+        db.commit()
+        db.refresh(existing)
+        return existing
 
     ev = Evidencia(
         pqrs_id=pqrs_id,

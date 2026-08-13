@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI):
 
         with SessionLocal() as db:
             permission_service.sembrar_defaults(db)
+            permission_service.asegurar_permisos_administrador(db)
     except Exception as e:
         logger.error(f"No se pudo aplicar seed inicial: {e}")
         raise
@@ -80,9 +81,16 @@ app.add_middleware(
 @app.exception_handler(IntegrityError)
 async def integrity_exception_handler(request: Request, exc: IntegrityError):
     logger.error(f"IntegrityError: {exc.orig}")
+    detail = "Violación de integridad de datos."
+    orig = str(getattr(exc, "orig", "") or "")
+    if "uq_evidencia_producto_tipo" in orig:
+        detail = (
+            "Ya existe una foto de ese tipo para el producto. "
+            "Intenta nuevamente; si el error persiste, recarga la página."
+        )
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
-        content={"detail": "Violación de integridad de datos.", "error": str(exc.orig)},
+        content={"detail": detail, "error": str(exc.orig)},
     )
 
 
