@@ -188,10 +188,19 @@ class InconformidadFiltroOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ProductoCatalogoFiltroOut(BaseModel):
+    id: int
+    nombre: str
+    categoria_id: int
+    categoria_nombre: str | None = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PQRSOpcionesFiltro(BaseModel):
     ciudades: list[str]
     areas: list[AreaFiltroOut]
     inconformidades: list[InconformidadFiltroOut]
+    productos: list[ProductoCatalogoFiltroOut]
 
 
 class PQRSDetail(BaseModel):

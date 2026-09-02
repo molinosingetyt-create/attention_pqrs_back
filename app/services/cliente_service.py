@@ -1,9 +1,16 @@
 from fastapi import HTTPException, status
 from sqlalchemy import and_, exists, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.enums import RolUsuario
 from app.core.permissions import Permiso
+from app.core.sede_scope import (
+    condicion_cliente_por_sede,
+    exigir_cliente_en_alcance,
+    exigir_sede_activa,
+    exigir_vendedor_en_alcance,
+    sede_id_alcance,
+)
 from app.services import permission_service
 from app.models.cliente import Cliente
 from app.models.pqrs import PQRS
@@ -35,6 +42,23 @@ def _vendedor_puede_ver_cliente(db: Session, cliente: Cliente, actor: Usuario) -
     return row is not None
 
 
+def _resolver_sede_cliente(
+    db: Session,
+    actor: Usuario,
+    sede_id: int | None,
+    vendedor: Usuario | None,
+) -> int | None:
+    alcance = sede_id_alcance(actor)
+    if alcance is not None:
+        return alcance
+    resolved = sede_id
+    if resolved is None and vendedor is not None:
+        resolved = vendedor.sede_id
+    if resolved is not None:
+        exigir_sede_activa(db, resolved)
+    return resolved
+
+
 def list_clientes(
     db: Session,
     q: str | None = None,
@@ -46,6 +70,9 @@ def list_clientes(
     scope = _filtro_vendedor_lista(actor)
     if scope is not None:
         base = base.where(scope)
+    sede_scope = condicion_cliente_por_sede(actor)
+    if sede_scope is not None:
+        base = base.where(sede_scope)
     if q:
         like = f"%{q.strip().lower()}%"
         base = base.where(
@@ -66,7 +93,11 @@ def list_clientes(
 
 
 def get_cliente(db: Session, cliente_id: int, actor: Usuario | None = None) -> Cliente:
-    c = db.get(Cliente, cliente_id)
+    c = db.execute(
+        select(Cliente)
+        .where(Cliente.id == cliente_id)
+        .options(selectinload(Cliente.vendedor_asignado), selectinload(Cliente.sede))
+    ).scalar_one_or_none()
     if not c:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Cliente no encontrado")
     if actor is not None and actor.rol == RolUsuario.VENDEDOR.value:
@@ -75,6 +106,7 @@ def get_cliente(db: Session, cliente_id: int, actor: Usuario | None = None) -> C
                 status.HTTP_403_FORBIDDEN,
                 "No tienes permisos para ver este cliente.",
             )
+    exigir_cliente_en_alcance(actor, c)
     return c
 
 
@@ -85,24 +117,33 @@ def create_cliente(db: Session, data: ClienteCreate, actor: Usuario) -> Cliente:
     if exists_cliente:
         raise HTTPException(status.HTTP_409_CONFLICT, "Ya existe un cliente con ese NIT.")
 
-    payload = data.model_dump(exclude={"vendedor_asignado_id"}, exclude_unset=False)
+    payload = data.model_dump(
+        exclude={"vendedor_asignado_id", "sede_id"}, exclude_unset=False
+    )
     vendedor_asignado_id: int | None = None
+    vendedor: Usuario | None = None
 
     if actor.rol == RolUsuario.VENDEDOR.value:
         vendedor_asignado_id = actor.id
+        vendedor = actor
     elif data.vendedor_asignado_id is not None:
         permission_service.exigir_permiso(db, actor, Permiso.CLIENTES_ASIGNAR_VENDEDOR)
         v = db.get(Usuario, data.vendedor_asignado_id)
-        if not v or v.rol != RolUsuario.VENDEDOR.value or not v.activo:
+        if not v:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 "El vendedor asignado no existe o no es un vendedor activo.",
             )
+        exigir_vendedor_en_alcance(actor, v)
         vendedor_asignado_id = data.vendedor_asignado_id
+        vendedor = v
+
+    sede_id = _resolver_sede_cliente(db, actor, data.sede_id, vendedor)
 
     cliente = Cliente(
         **payload,
         vendedor_asignado_id=vendedor_asignado_id,
+        sede_id=sede_id,
         activo=True,
     )
     db.add(cliente)
@@ -116,34 +157,40 @@ def update_cliente(db: Session, cliente_id: int, data: ClienteUpdate, actor: Usu
     changes = data.model_dump(exclude_unset=True)
 
     if actor.rol == RolUsuario.VENDEDOR.value:
-        for forbidden in ("activo", "vendedor_asignado_id"):
+        for forbidden in ("activo", "vendedor_asignado_id", "sede_id"):
             if forbidden in changes:
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN,
-                    "No puedes modificar el estado ni la asignación del cliente.",
+                    "No puedes modificar el estado, la sede ni la asignación del cliente.",
                 )
-    elif actor.rol == RolUsuario.ADMINISTRATIVO_COMERCIAL.value:
-        for forbidden in ("activo", "vendedor_asignado_id"):
-            if forbidden in changes:
-                raise HTTPException(
-                    status.HTTP_403_FORBIDDEN,
-                    "Solo el administrador puede deshabilitar clientes o asignar vendedor.",
-                )
-
     if "vendedor_asignado_id" in changes:
         permission_service.exigir_permiso(db, actor, Permiso.CLIENTES_ASIGNAR_VENDEDOR)
     if "activo" in changes:
         permission_service.exigir_permiso(db, actor, Permiso.CLIENTES_ACTIVAR)
+    if "sede_id" in changes and (
+        sede_id_alcance(actor) is not None
+        or actor.rol == RolUsuario.ADMINISTRATIVO_COMERCIAL.value
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "No puedes cambiar la sede de un cliente.",
+        )
 
     if "vendedor_asignado_id" in changes:
         vid = changes["vendedor_asignado_id"]
         if vid is not None:
             v = db.get(Usuario, vid)
-            if not v or v.rol != RolUsuario.VENDEDOR.value or not v.activo:
+            if not v:
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     "El vendedor asignado no existe o no es un vendedor activo.",
                 )
+            exigir_vendedor_en_alcance(actor, v)
+            if cliente.sede_id is None and v.sede_id:
+                cliente.sede_id = v.sede_id
+
+    if "sede_id" in changes and changes["sede_id"] is not None:
+        exigir_sede_activa(db, changes["sede_id"])
 
     for k, v in changes.items():
         setattr(cliente, k, v)

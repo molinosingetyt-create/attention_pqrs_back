@@ -25,6 +25,7 @@ from app.routers import (
     inconformidades,
     permisos,
     pqrs,
+    sedes,
     seguimiento,
     usuarios,
 )
@@ -103,11 +104,25 @@ async def sqla_exception_handler(request: Request, exc: SQLAlchemyError):
     )
 
 
+def _sanitize_validation_errors(errors: list[dict]) -> list[dict]:
+    """`ctx` puede contener la excepción original (no serializable a JSON)."""
+    clean: list[dict] = []
+    for err in errors:
+        err = dict(err)
+        ctx = err.get("ctx")
+        if isinstance(ctx, dict):
+            err["ctx"] = {
+                k: (str(v) if isinstance(v, BaseException) else v) for k, v in ctx.items()
+            }
+        clean.append(err)
+    return clean
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": "Datos inválidos.", "errors": exc.errors()},
+        content={"detail": "Datos inválidos.", "errors": _sanitize_validation_errors(exc.errors())},
     )
 
 
@@ -132,6 +147,7 @@ app.include_router(seguimiento.router, prefix=api_prefix)
 app.include_router(devoluciones.router, prefix=api_prefix)
 app.include_router(dashboard.router, prefix=api_prefix)
 app.include_router(permisos.router, prefix=api_prefix)
+app.include_router(sedes.router, prefix=api_prefix)
 
 
 upload_path = Path(settings.UPLOAD_DIR)

@@ -45,6 +45,7 @@ class Permiso:
     CONFIG_GESTIONAR = "configuracion.gestionar"
     INCONFORMIDADES_GESTIONAR = "inconformidades.gestionar"
     PERMISOS_GESTIONAR = "permisos.gestionar"
+    SEDES_GESTIONAR = "sedes.gestionar"
 
 
 PERMISSION_CATALOG: list[PermisoMeta] = [
@@ -72,6 +73,7 @@ PERMISSION_CATALOG: list[PermisoMeta] = [
     {"codigo": Permiso.CONFIG_GESTIONAR, "modulo": "configuracion", "descripcion": "Gestionar áreas, categorías y catálogo"},
     {"codigo": Permiso.INCONFORMIDADES_GESTIONAR, "modulo": "motivos", "descripcion": "Crear y editar motivos"},
     {"codigo": Permiso.PERMISOS_GESTIONAR, "modulo": "permisos", "descripcion": "Actualizar matriz de permisos por rol"},
+    {"codigo": Permiso.SEDES_GESTIONAR, "modulo": "sedes", "descripcion": "Crear y editar sedes"},
 ]
 
 ALL_PERMISSION_CODES: frozenset[str] = frozenset(p["codigo"] for p in PERMISSION_CATALOG)
@@ -88,6 +90,16 @@ _BASE_AUTHENTICATED = [
 
 DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
     "ADMINISTRADOR": sorted(ALL_PERMISSION_CODES),
+    "ADMINISTRADOR_SEDE": [
+        *_BASE_AUTHENTICATED,
+        Permiso.CLIENTES_CREAR,
+        Permiso.CLIENTES_EDITAR,
+        Permiso.CLIENTES_ASIGNAR_VENDEDOR,
+        Permiso.PQRS_EDITAR,
+        Permiso.PQRS_SEGUIMIENTO_CREAR,
+        Permiso.PQRS_EVIDENCIA_SUBIR,
+        Permiso.PQRS_FILTRAR_VENDEDOR,
+    ],
     "VENDEDOR": [
         *_BASE_AUTHENTICATED,
         Permiso.CLIENTES_CREAR,
@@ -97,6 +109,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         *_BASE_AUTHENTICATED,
         Permiso.CLIENTES_CREAR,
         Permiso.CLIENTES_EDITAR,
+        Permiso.CLIENTES_ASIGNAR_VENDEDOR,
         Permiso.PQRS_EDITAR,
         Permiso.PQRS_SEGUIMIENTO_CREAR,
         Permiso.PQRS_EVIDENCIA_SUBIR,

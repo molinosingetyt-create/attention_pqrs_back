@@ -19,6 +19,13 @@ from app.core.enums import (
     TipoPQRS,
 )
 from app.core.permissions import Permiso
+from app.core.sede_scope import (
+    condicion_pqrs_por_sede,
+    exigir_cliente_en_alcance,
+    exigir_pqrs_en_alcance,
+    exigir_vendedor_en_alcance,
+    sede_id_alcance,
+)
 from app.services import permission_service
 from app.core.config import settings
 from app.models.area import Area
@@ -92,7 +99,7 @@ def _producto_pqrs_desde_create(db: Session, p: ProductoPQRSCreate) -> ProductoP
     )
 
 
-def _get_pqrs_or_404(db: Session, pqrs_id: int) -> PQRS:
+def _get_pqrs_or_404(db: Session, pqrs_id: int, actor: Usuario | None = None) -> PQRS:
     pqrs = db.execute(
         select(PQRS)
         .where(PQRS.id == pqrs_id)
@@ -117,6 +124,7 @@ def _get_pqrs_or_404(db: Session, pqrs_id: int) -> PQRS:
     ).scalar_one_or_none()
     if not pqrs:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "PQRS no encontrada")
+    exigir_pqrs_en_alcance(actor, pqrs)
     return pqrs
 
 
@@ -178,14 +186,15 @@ def _notify_area_for_pqrs(db: Session, pqrs: PQRS) -> None:
     )
 
 
-def notify_calidad_for_pqrs(db: Session, pqrs_id: int) -> None:
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+def notify_calidad_for_pqrs(db: Session, pqrs_id: int, actor: Usuario | None = None) -> None:
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     _validar_evidencias_productos_completas(pqrs)
     _notify_area_for_pqrs(db, pqrs)
 
 
 def _assert_cliente_usable_por_vendedor(db: Session, cliente: Cliente, vendedor: Usuario) -> None:
     if vendedor.rol != RolUsuario.VENDEDOR.value:
+        exigir_cliente_en_alcance(vendedor, cliente)
         return
     if not cliente.activo:
         raise HTTPException(
@@ -216,10 +225,17 @@ def create_pqrs(db: Session, data: PQRSCreate, creador: Usuario) -> PQRS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cliente no existe.")
     _assert_cliente_usable_por_vendedor(db, cliente, creador)
 
+    vendedor_id = data.vendedor_id or (creador.id if creador.rol == "VENDEDOR" else None)
+    if vendedor_id is not None:
+        vend = db.get(Usuario, vendedor_id)
+        if not vend:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "El vendedor no existe.")
+        exigir_vendedor_en_alcance(creador, vend)
+
     primer_producto = data.productos[0] if data.productos else None
     pqrs = PQRS(
         cliente_id=data.cliente_id,
-        vendedor_id=data.vendedor_id or (creador.id if creador.rol == "VENDEDOR" else None),
+        vendedor_id=vendedor_id,
         tipo=data.tipo.value,
         inconformidad_id=data.inconformidad_id,
         numero_factura=data.numero_factura or (primer_producto.numero_factura if primer_producto else None),
@@ -241,9 +257,7 @@ def create_pqrs(db: Session, data: PQRSCreate, creador: Usuario) -> PQRS:
     db.flush()
     pqrs.radicado = _generar_radicado(pqrs.id, pqrs.tipo)
     db.commit()
-    db.refresh(pqrs)
-
-    return _get_pqrs_or_404(db, pqrs.id)
+    return _get_pqrs_or_404(db, pqrs.id, creador)
 
 
 def _puede_editar_pqrs(db: Session, actor: Usuario | None) -> bool:
@@ -342,7 +356,7 @@ def upsert_analisis_responsabilidad(
     data: AnalisisResponsabilidadUpsert,
     actor: Usuario,
 ) -> PqrsAnalisisResponsabilidad:
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     _exigir_area_responsable(actor, pqrs)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
@@ -383,7 +397,7 @@ def upsert_satisfaccion_cliente(
     data: SatisfaccionClienteUpsert,
     actor: Usuario,
 ) -> PqrsSatisfaccionCliente:
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -434,6 +448,7 @@ def list_pqrs(
     ciudad: str | None = None,
     estado_area_responsable: EstadoAnalisisResponsabilidad | None = None,
     inconformidad_id: int | None = None,
+    producto_catalogo_id: int | None = None,
     fecha_desde: datetime | None = None,
     fecha_hasta: datetime | None = None,
     q: str | None = None,
@@ -444,6 +459,8 @@ def list_pqrs(
     if actor is not None and actor.rol == RolUsuario.VENDEDOR.value:
         if not _puede_editar_pqrs(db, actor):
             vendedor_id = actor.id
+
+    sede_cond = condicion_pqrs_por_sede(actor)
 
     stmt = (
         select(
@@ -484,6 +501,14 @@ def list_pqrs(
             conditions.append(PqrsAnalisisResponsabilidad.procedente.is_(False))
     if inconformidad_id:
         conditions.append(PQRS.inconformidad_id == inconformidad_id)
+    if producto_catalogo_id:
+        conditions.append(
+            PQRS.id.in_(
+                select(ProductoPQRS.pqrs_id).where(
+                    ProductoPQRS.producto_catalogo_id == producto_catalogo_id
+                )
+            )
+        )
     if fecha_desde:
         conditions.append(PQRS.fecha_creacion >= fecha_desde)
     if fecha_hasta:
@@ -499,6 +524,8 @@ def list_pqrs(
                 func.lower(Cliente.nit).like(like),
             )
         )
+    if sede_cond is not None:
+        conditions.append(sede_cond)
     if conditions:
         stmt = stmt.where(and_(*conditions))
 
@@ -572,6 +599,11 @@ def opciones_filtro_listado(
         and not _puede_editar_pqrs(db, actor)
     ):
         ciudades_stmt = ciudades_stmt.where(PQRS.vendedor_id == actor.id)
+    sede_cond = condicion_pqrs_por_sede(actor)
+    if sede_cond is not None:
+        ciudades_stmt = ciudades_stmt.outerjoin(Usuario, Usuario.id == PQRS.vendedor_id).where(
+            sede_cond
+        )
 
     ciudades = [
         c.strip()
@@ -579,6 +611,14 @@ def opciones_filtro_listado(
         if c and c.strip()
     ]
     areas = list(db.execute(select(Area).order_by(Area.nombre.asc())).scalars())
+    productos = list(
+        db.execute(
+            select(ProductoCatalogo)
+            .options(selectinload(ProductoCatalogo.categoria))
+            .where(ProductoCatalogo.activo.is_(True))
+            .order_by(ProductoCatalogo.nombre.asc())
+        ).scalars()
+    )
     inconformidades = list(
         db.execute(
             select(Inconformidad)
@@ -600,11 +640,20 @@ def opciones_filtro_listado(
             }
             for i in inconformidades
         ],
+        "productos": [
+            {
+                "id": p.id,
+                "nombre": p.nombre,
+                "categoria_id": p.categoria_id,
+                "categoria_nombre": p.categoria.nombre if p.categoria else None,
+            }
+            for p in productos
+        ],
     }
 
 
 def get_pqrs_detail(db: Session, pqrs_id: int, actor: Usuario | None = None) -> PQRS:
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     if (
         actor is not None
         and actor.rol == RolUsuario.VENDEDOR.value
@@ -615,13 +664,14 @@ def get_pqrs_detail(db: Session, pqrs_id: int, actor: Usuario | None = None) -> 
             status.HTTP_403_FORBIDDEN,
             "No tienes permisos para ver esta PQRS.",
         )
+    exigir_pqrs_en_alcance(actor, pqrs)
     return pqrs
 
 
 def update_pqrs(
     db: Session, pqrs_id: int, data: PQRSUpdate, actor: Usuario
 ) -> PQRS:
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
     changes = data.model_dump(exclude_unset=True)
 
@@ -645,6 +695,12 @@ def update_pqrs(
                 )
             )
 
+    if "vendedor_id" in changes and changes["vendedor_id"] is not None:
+        vend = db.get(Usuario, changes["vendedor_id"])
+        if not vend:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "El vendedor no existe.")
+        exigir_vendedor_en_alcance(actor, vend)
+
     for key in ("descripcion", "numero_factura", "lote", "inconformidad_id", "vendedor_id"):
         if key in changes and changes[key] is not None:
             setattr(pqrs, key, changes[key])
@@ -663,9 +719,8 @@ def update_pqrs(
         db,
         pqrs,
         usuario_id=actor.id,
-        observaciones=data.descripcion,
     )
-    return _get_pqrs_or_404(db, pqrs.id)
+    return _get_pqrs_or_404(db, pqrs.id, actor)
 
 
 def add_productos(
@@ -673,7 +728,7 @@ def add_productos(
 ) -> list[ProductoPQRS]:
     if actor is not None:
         permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -699,7 +754,7 @@ def update_producto(
     actor: Usuario,
 ) -> ProductoPQRS:
     permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -777,7 +832,7 @@ def delete_producto(
 ) -> None:
     if actor is not None:
         permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -802,7 +857,7 @@ def delete_producto(
 
 def delete_pqrs(db: Session, pqrs_id: int, actor: Usuario) -> None:
     permission_service.exigir_permiso(db, actor, Permiso.PQRS_ELIMINAR)
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     db.delete(pqrs)
     db.commit()
 
@@ -819,7 +874,7 @@ def add_evidencia(
     actor: Usuario | None = None,
     carga_inicial: bool = False,
 ) -> Evidencia:
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     if not _puede_subir_evidencia(db, actor, pqrs, carga_inicial=carga_inicial):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -882,7 +937,7 @@ def add_seguimiento(
     db: Session, pqrs_id: int, estado: EstadoPQRS, descripcion: str | None, actor: Usuario
 ) -> Seguimiento:
     permission_service.exigir_permiso(db, actor, Permiso.PQRS_SEGUIMIENTO_CREAR)
-    pqrs = _get_pqrs_or_404(db, pqrs_id)
+    pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -913,8 +968,10 @@ def add_seguimiento(
     return seg
 
 
-def listar_seguimientos(db: Session, pqrs_id: int) -> list[Seguimiento]:
-    _get_pqrs_or_404(db, pqrs_id)
+def listar_seguimientos(
+    db: Session, pqrs_id: int, actor: Usuario | None = None
+) -> list[Seguimiento]:
+    _get_pqrs_or_404(db, pqrs_id, actor)
     return list(
         db.execute(
             select(Seguimiento)

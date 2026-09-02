@@ -19,8 +19,12 @@ class Cliente(Base):
     vendedor_asignado_id: Mapped[int | None] = mapped_column(
         ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    sede_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sedes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     pqrs = relationship("PQRS", back_populates="cliente")
     vendedor_asignado = relationship(
         "Usuario", foreign_keys=[vendedor_asignado_id], back_populates="clientes_asignados"
     )
+    sede = relationship("Sede", back_populates="clientes")

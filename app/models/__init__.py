@@ -6,6 +6,7 @@ al momento de generar o crear el esquema.
 from app.models.area import Area  # noqa: F401
 from app.models.categoria_producto import CategoriaProducto  # noqa: F401
 from app.models.producto_catalogo import ProductoCatalogo  # noqa: F401
+from app.models.sede import Sede  # noqa: F401
 from app.models.usuario import Usuario  # noqa: F401
 from app.models.cliente import Cliente  # noqa: F401
 from app.models.inconformidad import Inconformidad  # noqa: F401

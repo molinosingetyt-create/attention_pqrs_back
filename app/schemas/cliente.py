@@ -23,7 +23,11 @@ class ClienteCreate(BaseModel):
     ciudad: str = Field(..., min_length=1, max_length=100)
     vendedor_asignado_id: int | None = Field(
         None,
-        description="Solo administrador: vendedor responsable del cliente.",
+        description="Vendedor responsable del cliente (misma sede si aplica).",
+    )
+    sede_id: int | None = Field(
+        None,
+        description="Sede del cliente. El administrador de sede usa la suya.",
     )
 
 
@@ -39,12 +43,14 @@ class ClienteUpdate(BaseModel):
     )
     vendedor_asignado_id: int | None = Field(
         None,
-        description="Solo administrador: reasignar vendedor responsable.",
+        description="Reasignar vendedor responsable.",
     )
+    sede_id: int | None = Field(None, description="Reasignar sede del cliente.")
 
 
 class ClienteOut(ClienteBase):
     id: int
     activo: bool = True
     vendedor_asignado_id: int | None = None
+    sede_id: int | None = None
     model_config = ConfigDict(from_attributes=True)

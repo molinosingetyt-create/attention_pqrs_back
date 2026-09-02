@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -15,10 +15,14 @@ class Usuario(Base):
     password_hash: Mapped[str] = mapped_column("contrasena", String(255), nullable=False)
     rol: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sede_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sedes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     fecha_creacion: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    sede = relationship("Sede", back_populates="usuarios")
     pqrs_como_vendedor = relationship(
         "PQRS", back_populates="vendedor", foreign_keys="PQRS.vendedor_id"
     )
