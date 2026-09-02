@@ -196,10 +196,17 @@ class ProductoCatalogoFiltroOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CategoriaProductoFiltroOut(BaseModel):
+    id: int
+    nombre: str
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PQRSOpcionesFiltro(BaseModel):
     ciudades: list[str]
     areas: list[AreaFiltroOut]
     inconformidades: list[InconformidadFiltroOut]
+    categorias: list[CategoriaProductoFiltroOut]
     productos: list[ProductoCatalogoFiltroOut]
 
 

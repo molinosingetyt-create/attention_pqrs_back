@@ -35,6 +35,7 @@ from app.models.inconformidad import Inconformidad
 from app.models.pqrs import PQRS
 from app.models.pqrs_analisis_responsabilidad import PqrsAnalisisResponsabilidad
 from app.models.pqrs_satisfaccion_cliente import PqrsSatisfaccionCliente
+from app.models.categoria_producto import CategoriaProducto
 from app.models.producto_catalogo import ProductoCatalogo
 from app.models.producto_pqrs import ProductoPQRS
 from app.models.seguimiento import Seguimiento
@@ -449,6 +450,7 @@ def list_pqrs(
     estado_area_responsable: EstadoAnalisisResponsabilidad | None = None,
     inconformidad_id: int | None = None,
     producto_catalogo_id: int | None = None,
+    categoria_id: int | None = None,
     fecha_desde: datetime | None = None,
     fecha_hasta: datetime | None = None,
     q: str | None = None,
@@ -507,6 +509,17 @@ def list_pqrs(
                 select(ProductoPQRS.pqrs_id).where(
                     ProductoPQRS.producto_catalogo_id == producto_catalogo_id
                 )
+            )
+        )
+    elif categoria_id:
+        conditions.append(
+            PQRS.id.in_(
+                select(ProductoPQRS.pqrs_id)
+                .join(
+                    ProductoCatalogo,
+                    ProductoCatalogo.id == ProductoPQRS.producto_catalogo_id,
+                )
+                .where(ProductoCatalogo.categoria_id == categoria_id)
             )
         )
     if fecha_desde:
@@ -611,6 +624,13 @@ def opciones_filtro_listado(
         if c and c.strip()
     ]
     areas = list(db.execute(select(Area).order_by(Area.nombre.asc())).scalars())
+    categorias = list(
+        db.execute(
+            select(CategoriaProducto)
+            .where(CategoriaProducto.activo.is_(True))
+            .order_by(CategoriaProducto.nombre.asc())
+        ).scalars()
+    )
     productos = list(
         db.execute(
             select(ProductoCatalogo)
@@ -640,6 +660,7 @@ def opciones_filtro_listado(
             }
             for i in inconformidades
         ],
+        "categorias": [{"id": c.id, "nombre": c.nombre} for c in categorias],
         "productos": [
             {
                 "id": p.id,
