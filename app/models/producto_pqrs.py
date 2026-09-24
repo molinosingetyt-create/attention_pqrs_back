@@ -36,3 +36,10 @@ class ProductoPQRS(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    analisis = relationship(
+        "ProductoPqrsAnalisis",
+        back_populates="producto",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.enums import (
@@ -38,6 +38,7 @@ from app.models.pqrs_satisfaccion_cliente import PqrsSatisfaccionCliente
 from app.models.categoria_producto import CategoriaProducto
 from app.models.producto_catalogo import ProductoCatalogo
 from app.models.producto_pqrs import ProductoPQRS
+from app.models.producto_pqrs_analisis import ProductoPqrsAnalisis
 from app.models.seguimiento import Seguimiento
 from app.models.usuario import Usuario
 from app.schemas.pqrs import (
@@ -64,14 +65,110 @@ def _generar_radicado(pqrs_id: int, tipo: str) -> str:
     return f"RAD-{pqrs_id:06d}{_RADICADO_SUFFIX.get(tipo, 'O')}"
 
 
-def _estado_area_responsabilidad(
-    analisis: PqrsAnalisisResponsabilidad | None,
+def _estado_area_desde_conteos(
+    n_productos: int | None,
+    n_analisis: int | None,
+    n_procedentes: int | None,
+    analisis_legacy: PqrsAnalisisResponsabilidad | None,
 ) -> EstadoAnalisisResponsabilidad:
-    if analisis is None:
-        return EstadoAnalisisResponsabilidad.NO_GESTIONADO
-    if analisis.procedente:
-        return EstadoAnalisisResponsabilidad.PROCEDENTE
-    return EstadoAnalisisResponsabilidad.NO_PROCEDENTE
+    """Consolida en un solo estado los conceptos emitidos por producto.
+
+    El radicado solo se considera resuelto cuando todos sus productos tienen
+    concepto; si falta alguno sigue figurando como no gestionado. Las PQRS
+    conceptuadas antes del análisis por producto se resuelven con su análisis
+    histórico de radicado.
+
+    Esta es la única regla de consolidación: la usan tanto el listado (que la
+    alimenta con agregados SQL) como el detalle (que la alimenta con los
+    objetos ya cargados).
+    """
+    n_productos = int(n_productos or 0)
+    n_analisis = int(n_analisis or 0)
+    n_procedentes = int(n_procedentes or 0)
+
+    if n_productos and n_analisis == n_productos:
+        if n_procedentes == n_productos:
+            return EstadoAnalisisResponsabilidad.PROCEDENTE
+        if n_procedentes == 0:
+            return EstadoAnalisisResponsabilidad.NO_PROCEDENTE
+        return EstadoAnalisisResponsabilidad.PARCIALMENTE_PROCEDENTE
+    if n_analisis == 0 and analisis_legacy is not None:
+        return (
+            EstadoAnalisisResponsabilidad.PROCEDENTE
+            if analisis_legacy.procedente
+            else EstadoAnalisisResponsabilidad.NO_PROCEDENTE
+        )
+    return EstadoAnalisisResponsabilidad.NO_GESTIONADO
+
+
+def _estado_area_responsabilidad(pqrs: PQRS) -> EstadoAnalisisResponsabilidad:
+    analisis = [p.analisis for p in pqrs.productos if p.analisis is not None]
+    return _estado_area_desde_conteos(
+        len(pqrs.productos),
+        len(analisis),
+        sum(1 for a in analisis if a.procedente),
+        pqrs.analisis_responsabilidad,
+    )
+
+
+def _resumen_analisis_subquery():
+    """Conteo por radicado de productos, conceptos emitidos y procedentes."""
+    return (
+        select(
+            ProductoPQRS.pqrs_id.label("pqrs_id"),
+            func.count(ProductoPQRS.id).label("n_productos"),
+            func.count(ProductoPqrsAnalisis.id).label("n_analisis"),
+            func.coalesce(
+                func.sum(
+                    case((ProductoPqrsAnalisis.procedente.is_(True), 1), else_=0)
+                ),
+                0,
+            ).label("n_procedentes"),
+        )
+        .select_from(ProductoPQRS)
+        .outerjoin(
+            ProductoPqrsAnalisis,
+            ProductoPqrsAnalisis.producto_pqrs_id == ProductoPQRS.id,
+        )
+        .group_by(ProductoPQRS.pqrs_id)
+        .subquery()
+    )
+
+
+def _condicion_estado_area_responsable(
+    resumen, estado: EstadoAnalisisResponsabilidad
+):
+    """Traduce a SQL la misma regla de `_estado_area_desde_conteos`."""
+    # Sin fila en el resumen (PQRS sin productos) los conteos llegan en NULL.
+    completo = and_(
+        resumen.c.n_productos > 0,
+        resumen.c.n_analisis == resumen.c.n_productos,
+    )
+    sin_conceptos = or_(resumen.c.n_analisis.is_(None), resumen.c.n_analisis == 0)
+
+    if estado == EstadoAnalisisResponsabilidad.PROCEDENTE:
+        return or_(
+            and_(completo, resumen.c.n_procedentes == resumen.c.n_productos),
+            and_(sin_conceptos, PqrsAnalisisResponsabilidad.procedente.is_(True)),
+        )
+    if estado == EstadoAnalisisResponsabilidad.NO_PROCEDENTE:
+        return or_(
+            and_(completo, resumen.c.n_procedentes == 0),
+            and_(sin_conceptos, PqrsAnalisisResponsabilidad.procedente.is_(False)),
+        )
+    if estado == EstadoAnalisisResponsabilidad.PARCIALMENTE_PROCEDENTE:
+        return and_(
+            completo,
+            resumen.c.n_procedentes > 0,
+            resumen.c.n_procedentes < resumen.c.n_productos,
+        )
+    return or_(
+        and_(sin_conceptos, PqrsAnalisisResponsabilidad.id.is_(None)),
+        and_(
+            resumen.c.n_analisis > 0,
+            resumen.c.n_analisis < resumen.c.n_productos,
+        ),
+    )
 
 
 def _producto_pqrs_desde_create(db: Session, p: ProductoPQRSCreate) -> ProductoPQRS:
@@ -113,6 +210,12 @@ def _get_pqrs_or_404(db: Session, pqrs_id: int, actor: Usuario | None = None) ->
             selectinload(PQRS.productos)
             .selectinload(ProductoPQRS.producto_catalogo)
             .selectinload(ProductoCatalogo.categoria),
+            selectinload(PQRS.productos)
+            .selectinload(ProductoPQRS.inconformidad)
+            .selectinload(Inconformidad.area),
+            selectinload(PQRS.productos)
+            .selectinload(ProductoPQRS.analisis)
+            .selectinload(ProductoPqrsAnalisis.usuario),
             selectinload(PQRS.evidencias),
             selectinload(PQRS.seguimientos).selectinload(Seguimiento.usuario),
             selectinload(PQRS.analisis_responsabilidad).selectinload(
@@ -331,39 +434,52 @@ def _validar_evidencias_productos_completas(pqrs: PQRS) -> None:
         )
 
 
-def _codigo_area_responsable(pqrs: PQRS) -> str | None:
+def area_responsable_producto(pqrs: PQRS, producto: ProductoPQRS) -> Area | None:
+    """Área que conceptúa el producto: la de su motivo, o la del motivo de la PQRS."""
+    if producto.inconformidad and producto.inconformidad.area:
+        return producto.inconformidad.area
     if pqrs.inconformidad and pqrs.inconformidad.area:
-        return pqrs.inconformidad.area.codigo
+        return pqrs.inconformidad.area
     return None
 
 
-def _exigir_area_responsable(actor: Usuario, pqrs: PQRS) -> None:
-    codigo = _codigo_area_responsable(pqrs)
-    if not codigo:
+def _exigir_area_responsable_producto(
+    actor: Usuario, pqrs: PQRS, producto: ProductoPQRS
+) -> None:
+    area = area_responsable_producto(pqrs, producto)
+    if not area:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "La PQRS no tiene un motivo con área responsable asignada.",
+            "El producto no tiene un motivo con área responsable asignada.",
         )
-    if actor.rol != codigo:
+    if actor.rol != area.codigo:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            f"Solo usuarios del área {codigo} pueden gestionar el análisis de responsabilidad.",
+            f"Solo usuarios del área {area.codigo} pueden conceptuar este producto.",
         )
 
 
-def upsert_analisis_responsabilidad(
+def upsert_analisis_producto(
     db: Session,
     pqrs_id: int,
+    producto_id: int,
     data: AnalisisResponsabilidadUpsert,
     actor: Usuario,
-) -> PqrsAnalisisResponsabilidad:
+) -> ProductoPqrsAnalisis:
+    """Registra o actualiza el concepto de procedencia de un producto."""
     pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
-    _exigir_area_responsable(actor, pqrs)
     if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS está cerrada o rechazada; no se puede modificar el análisis.",
         )
+
+    producto = next((p for p in pqrs.productos if p.id == producto_id), None)
+    if producto is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "El producto no pertenece a esta PQRS."
+        )
+    _exigir_area_responsable_producto(actor, pqrs, producto)
 
     comentario = data.comentario.strip()
     if not comentario:
@@ -372,10 +488,10 @@ def upsert_analisis_responsabilidad(
             "El comentario del análisis es obligatorio.",
         )
 
-    analisis = pqrs.analisis_responsabilidad
+    analisis = producto.analisis
     if analisis is None:
-        analisis = PqrsAnalisisResponsabilidad(
-            pqrs_id=pqrs.id,
+        analisis = ProductoPqrsAnalisis(
+            producto_pqrs_id=producto.id,
             procedente=data.procedente,
             comentario=comentario,
             usuario_id=actor.id,
@@ -464,12 +580,17 @@ def list_pqrs(
 
     sede_cond = condicion_pqrs_por_sede(actor)
 
+    resumen = _resumen_analisis_subquery()
+
     stmt = (
         select(
             PQRS,
             Cliente.nombre,
             Cliente.apellidos,
             Usuario.nombre.label("vendedor_nombre"),
+            resumen.c.n_productos,
+            resumen.c.n_analisis,
+            resumen.c.n_procedentes,
         )
         .join(Cliente, Cliente.id == PQRS.cliente_id)
         .outerjoin(Usuario, Usuario.id == PQRS.vendedor_id)
@@ -478,6 +599,7 @@ def list_pqrs(
             PqrsAnalisisResponsabilidad,
             PqrsAnalisisResponsabilidad.pqrs_id == PQRS.id,
         )
+        .outerjoin(resumen, resumen.c.pqrs_id == PQRS.id)
         .options(
             selectinload(PQRS.inconformidad).selectinload(Inconformidad.area),
             selectinload(PQRS.analisis_responsabilidad),
@@ -495,12 +617,9 @@ def list_pqrs(
     if ciudad and ciudad.strip():
         conditions.append(func.lower(func.trim(Cliente.ciudad)) == ciudad.strip().lower())
     if estado_area_responsable:
-        if estado_area_responsable == EstadoAnalisisResponsabilidad.NO_GESTIONADO:
-            conditions.append(PqrsAnalisisResponsabilidad.id.is_(None))
-        elif estado_area_responsable == EstadoAnalisisResponsabilidad.PROCEDENTE:
-            conditions.append(PqrsAnalisisResponsabilidad.procedente.is_(True))
-        else:
-            conditions.append(PqrsAnalisisResponsabilidad.procedente.is_(False))
+        conditions.append(
+            _condicion_estado_area_responsable(resumen, estado_area_responsable)
+        )
     if inconformidad_id:
         conditions.append(PQRS.inconformidad_id == inconformidad_id)
     if producto_catalogo_id:
@@ -553,6 +672,7 @@ def list_pqrs(
                 PqrsAnalisisResponsabilidad,
                 PqrsAnalisisResponsabilidad.pqrs_id == PQRS.id,
             )
+            .outerjoin(resumen, resumen.c.pqrs_id == PQRS.id)
             .where(and_(*conditions))
         )
     total = int(db.execute(count_stmt).scalar_one())
@@ -582,8 +702,8 @@ def list_pqrs(
                 "area_nombre": inc_responsable.area.nombre if inc_responsable else None,
                 "inconformidad_id": inc_responsable.id if inc_responsable else None,
                 "inconformidad_nombre": inc_responsable.nombre if inc_responsable else None,
-                "estado_area_responsable": _estado_area_responsabilidad(
-                    pqrs.analisis_responsabilidad
+                "estado_area_responsable": _estado_area_desde_conteos(
+                    row[4], row[5], row[6], pqrs.analisis_responsabilidad
                 ).value,
                 "numero_factura": pqrs.numero_factura,
                 "fecha_creacion": pqrs.fecha_creacion,

@@ -32,9 +32,13 @@ class EstadoPQRS(str, Enum):
 
 
 class EstadoAnalisisResponsabilidad(str, Enum):
+    """Estado consolidado del radicado a partir del concepto de cada producto."""
+
     NO_GESTIONADO = "NO GESTIONADO"
     PROCEDENTE = "PROCEDENTE"
     NO_PROCEDENTE = "NO PROCEDENTE"
+    # Unos productos resultaron procedentes y otros no dentro del mismo radicado.
+    PARCIALMENTE_PROCEDENTE = "PARCIALMENTE PROCEDENTE"
 
 
 class TipoEvidencia(str, Enum):

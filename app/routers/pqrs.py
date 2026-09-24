@@ -12,6 +12,7 @@ from app.core.permissions import Permiso
 from app.models.usuario import Usuario
 from app.schemas.common import Page
 from app.schemas.pqrs import (
+    AnalisisProductoOut,
     AnalisisResponsabilidadOut,
     AnalisisResponsabilidadUpsert,
     EvidenciaOut,
@@ -107,7 +108,10 @@ def opciones_filtro_pqrs(
     return pqrs_service.opciones_filtro_listado(db, actor)
 
 
-@router.get("/export")
+@router.get(
+    "/export",
+    dependencies=[Depends(require_permission(Permiso.PQRS_EXPORTAR))],
+)
 def exportar_pqrs(
     estado: EstadoPQRS | None = Query(None),
     tipo: TipoPQRS | None = Query(None),
@@ -200,7 +204,7 @@ def detalle(
 
 @router.get(
     "/{pqrs_id}/pdf",
-    dependencies=[Depends(require_permission(Permiso.PQRS_VER))],
+    dependencies=[Depends(require_permission(Permiso.PQRS_DESCARGAR_PDF))],
 )
 def descargar_pdf_pqrs(
     pqrs_id: int,
@@ -320,15 +324,22 @@ async def subir_evidencia(
     return EvidenciaOut.model_validate(ev)
 
 
-@router.put("/{pqrs_id}/analisis-responsabilidad", response_model=AnalisisResponsabilidadOut)
-def guardar_analisis_responsabilidad(
+@router.put(
+    "/{pqrs_id}/productos/{producto_id}/analisis-responsabilidad",
+    response_model=AnalisisProductoOut,
+)
+def guardar_analisis_producto(
     pqrs_id: int,
+    producto_id: int,
     data: AnalisisResponsabilidadUpsert,
     db: Session = Depends(get_db),
     actor: Usuario = Depends(get_current_user),
 ):
-    analisis = pqrs_service.upsert_analisis_responsabilidad(db, pqrs_id, data, actor)
-    return _analisis_to_out(analisis)
+    """Concepto de procedencia y observación de un producto del radicado."""
+    analisis = pqrs_service.upsert_analisis_producto(
+        db, pqrs_id, producto_id, data, actor
+    )
+    return _analisis_producto_to_out(analisis)
 
 
 @router.put("/{pqrs_id}/satisfaccion-cliente", response_model=SatisfaccionClienteOut)
@@ -391,6 +402,18 @@ def _analisis_to_out(analisis) -> AnalisisResponsabilidadOut:
     )
 
 
+def _analisis_producto_to_out(analisis) -> AnalisisProductoOut:
+    return AnalisisProductoOut(
+        id=analisis.id,
+        producto_pqrs_id=analisis.producto_pqrs_id,
+        procedente=analisis.procedente,
+        comentario=analisis.comentario,
+        usuario_id=analisis.usuario_id,
+        usuario_nombre=analisis.usuario.nombre if analisis.usuario else None,
+        fecha_actualizacion=analisis.fecha_actualizacion,
+    )
+
+
 def _to_detail(pqrs) -> PQRSDetail:
     from app.schemas.cliente import ClienteOut
     from app.schemas.inconformidad import InconformidadOut
@@ -414,6 +437,11 @@ def _to_detail(pqrs) -> PQRSDetail:
                 key=lambda x: (x.tipo or "", x.fecha_subida),
             )
         ]
+        area = pqrs_service.area_responsable_producto(pqrs, p)
+        if area:
+            prod.area_responsable_codigo = area.codigo
+            prod.area_responsable_nombre = area.nombre
+        prod.analisis = _analisis_producto_to_out(p.analisis) if p.analisis else None
         productos_out.append(prod)
 
     return PQRSDetail(
@@ -437,6 +465,7 @@ def _to_detail(pqrs) -> PQRSDetail:
             if pqrs.analisis_responsabilidad
             else None
         ),
+        estado_area_responsable=pqrs_service._estado_area_responsabilidad(pqrs),
         satisfaccion_cliente=(
             _satisfaccion_to_out(pqrs.satisfaccion_cliente)
             if pqrs.satisfaccion_cliente

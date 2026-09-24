@@ -40,6 +40,11 @@ class ProductoPQRSOut(ProductoPQRSBase):
     categoria_id: int | None = None
     categoria_nombre: str | None = None
     evidencias: list["EvidenciaOut"] = []
+    # Área que debe emitir el concepto de este producto: la del motivo propio
+    # del producto y, si no tiene, la del motivo de la PQRS.
+    area_responsable_codigo: str | None = None
+    area_responsable_nombre: str | None = None
+    analisis: "AnalisisProductoOut | None" = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -78,6 +83,8 @@ class AnalisisResponsabilidadUpsert(BaseModel):
 
 
 class AnalisisResponsabilidadOut(BaseModel):
+    """Análisis único por radicado. Histórico de solo lectura."""
+
     id: int
     procedente: bool
     comentario: str
@@ -85,6 +92,10 @@ class AnalisisResponsabilidadOut(BaseModel):
     usuario_nombre: str | None = None
     fecha_actualizacion: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class AnalisisProductoOut(AnalisisResponsabilidadOut):
+    producto_pqrs_id: int
 
 
 class SatisfaccionClienteUpsert(BaseModel):
@@ -228,7 +239,12 @@ class PQRSDetail(BaseModel):
     productos: list[ProductoPQRSOut] = []
     evidencias: list[EvidenciaOut] = []
     seguimientos: list[SeguimientoOut] = []
+    # Histórico: concepto único emitido antes del análisis por producto.
     analisis_responsabilidad: AnalisisResponsabilidadOut | None = None
+    # Consolidado de los conceptos por producto.
+    estado_area_responsable: EstadoAnalisisResponsabilidad = (
+        EstadoAnalisisResponsabilidad.NO_GESTIONADO
+    )
     satisfaccion_cliente: SatisfaccionClienteOut | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -242,5 +258,6 @@ class UsuarioMini(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+ProductoPQRSOut.model_rebuild()
 PQRSDetail.model_rebuild()
 ProductoPQRSOut.model_rebuild()

@@ -32,6 +32,7 @@ class Permiso:
     PQRS_EDITAR = "pqrs.editar"
     PQRS_ELIMINAR = "pqrs.eliminar"
     PQRS_EXPORTAR = "pqrs.exportar"
+    PQRS_DESCARGAR_PDF = "pqrs.descargar_pdf"
     PQRS_SEGUIMIENTO_CREAR = "pqrs.seguimiento.crear"
     PQRS_EVIDENCIA_SUBIR = "pqrs.evidencia.subir"
     PQRS_FILTRAR_VENDEDOR = "pqrs.filtrar_vendedor"
@@ -62,7 +63,8 @@ PERMISSION_CATALOG: list[PermisoMeta] = [
     {"codigo": Permiso.PQRS_VER, "modulo": "pqrs", "descripcion": "Ver detalle de PQRS"},
     {"codigo": Permiso.PQRS_EDITAR, "modulo": "pqrs", "descripcion": "Editar PQRS"},
     {"codigo": Permiso.PQRS_ELIMINAR, "modulo": "pqrs", "descripcion": "Eliminar PQRS"},
-    {"codigo": Permiso.PQRS_EXPORTAR, "modulo": "pqrs", "descripcion": "Exportar PQRS a Excel"},
+    {"codigo": Permiso.PQRS_EXPORTAR, "modulo": "pqrs", "descripcion": "Descargar el listado de PQRS en Excel"},
+    {"codigo": Permiso.PQRS_DESCARGAR_PDF, "modulo": "pqrs", "descripcion": "Descargar los documentos PDF de una PQRS"},
     {"codigo": Permiso.PQRS_SEGUIMIENTO_CREAR, "modulo": "pqrs", "descripcion": "Registrar seguimiento en historial"},
     {"codigo": Permiso.PQRS_EVIDENCIA_SUBIR, "modulo": "pqrs", "descripcion": "Subir evidencias a PQRS"},
     {"codigo": Permiso.PQRS_FILTRAR_VENDEDOR, "modulo": "pqrs", "descripcion": "Filtrar listado por vendedor"},
@@ -78,13 +80,15 @@ PERMISSION_CATALOG: list[PermisoMeta] = [
 
 ALL_PERMISSION_CODES: frozenset[str] = frozenset(p["codigo"] for p in PERMISSION_CATALOG)
 
+# Las descargas (Excel y PDF) NO entran aquí: se asignan por rol desde
+# Configuración → Permisos, de modo que solo los perfiles designados puedan
+# extraer documentos del sistema.
 _BASE_AUTHENTICATED = [
     Permiso.DASHBOARD_VER,
     Permiso.CLIENTES_LISTAR,
     Permiso.PQRS_LISTAR,
     Permiso.PQRS_VER,
     Permiso.PQRS_CREAR,
-    Permiso.PQRS_EXPORTAR,
     Permiso.USUARIOS_LISTAR_VENDEDORES,
 ]
 
