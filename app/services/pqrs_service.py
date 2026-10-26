@@ -443,6 +443,12 @@ def area_responsable_producto(pqrs: PQRS, producto: ProductoPQRS) -> Area | None
     return None
 
 
+_ROLES_GESTION_COMERCIAL = (
+    RolUsuario.ADMINISTRATIVO_COMERCIAL.value,
+    RolUsuario.ADMINISTRADOR_SEDE.value,
+)
+
+
 def _exigir_area_responsable_producto(
     actor: Usuario, pqrs: PQRS, producto: ProductoPQRS
 ) -> None:
@@ -452,7 +458,14 @@ def _exigir_area_responsable_producto(
             status.HTTP_400_BAD_REQUEST,
             "El producto no tiene un motivo con área responsable asignada.",
         )
-    if actor.rol != area.codigo:
+    if actor.rol == RolUsuario.ADMINISTRADOR.value:
+        return
+    # Administrativo comercial y administrador de sede: todas las áreas excepto CALIDAD.
+    gestor_comercial = (
+        actor.rol in _ROLES_GESTION_COMERCIAL
+        and area.codigo != RolUsuario.CALIDAD.value
+    )
+    if actor.rol != area.codigo and not gestor_comercial:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             f"Solo usuarios del área {area.codigo} pueden conceptuar este producto.",
@@ -468,10 +481,21 @@ def upsert_analisis_producto(
 ) -> ProductoPqrsAnalisis:
     """Registra o actualiza el concepto de procedencia de un producto."""
     pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
-    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
+    if pqrs.estado == EstadoPQRS.RECHAZADA.value:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "La PQRS está cerrada o rechazada; no se puede modificar el análisis.",
+            "La PQRS está rechazada; no se puede modificar el análisis.",
+        )
+    # En PQRS cerrada, solo administradores, administrativo comercial y CALIDAD
+    # pueden seguir gestionando el análisis (cada uno dentro de sus áreas).
+    if pqrs.estado == EstadoPQRS.CERRADA.value and actor.rol not in (
+        RolUsuario.ADMINISTRADOR.value,
+        RolUsuario.CALIDAD.value,
+        *_ROLES_GESTION_COMERCIAL,
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "La PQRS está cerrada; no tienes permisos para modificar el análisis.",
         )
 
     producto = next((p for p in pqrs.productos if p.id == producto_id), None)
@@ -520,12 +544,7 @@ def upsert_satisfaccion_cliente(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS está cerrada o rechazada; no se puede modificar la satisfacción.",
         )
-    if not (
-        permission_service.usuario_tiene(
-            db, actor, Permiso.PQRS_SEGUIMIENTO_CREAR, Permiso.PQRS_EDITAR
-        )
-        or pqrs.vendedor_id == actor.id
-    ):
+    if actor.rol not in (RolUsuario.ADMINISTRADOR.value, *_ROLES_GESTION_COMERCIAL):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "No tienes permisos para registrar la satisfacción del cliente.",
