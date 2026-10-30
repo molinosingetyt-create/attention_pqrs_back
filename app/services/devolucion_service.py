@@ -8,7 +8,8 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.enums import EstadoPQRS, RolUsuario
+from app.core.enums import ROLES_DE_AREA, EstadoPQRS
+from app.core.sede_scope import condicion_pqrs_por_sede
 from app.models import Area, Cliente, Devolucion, Inconformidad, PQRS, ProductoPQRS
 from app.models.producto_catalogo import ProductoCatalogo
 from app.models.usuario import Usuario
@@ -175,13 +176,17 @@ def list_devoluciones_pendientes(
         select(Devolucion, PQRS, Cliente, Area, Inconformidad)
         .join(PQRS, PQRS.id == Devolucion.pqrs_id)
         .join(Cliente, Cliente.id == PQRS.cliente_id)
+        .outerjoin(Usuario, Usuario.id == PQRS.vendedor_id)
         .outerjoin(Inconformidad, Inconformidad.id == PQRS.inconformidad_id)
         .outerjoin(Area, Area.id == Inconformidad.area_id)
         .where(PQRS.inconformidad_id.isnot(None))
         .order_by(Devolucion.pendiente.desc(), Devolucion.fecha_registro.desc())
     )
-    if actor is not None and actor.rol == RolUsuario.CALIDAD.value:
-        stmt = stmt.where(Area.codigo == "CALIDAD")
+    if actor is not None and actor.rol in ROLES_DE_AREA:
+        stmt = stmt.where(Area.codigo == actor.rol)
+    sede_cond = condicion_pqrs_por_sede(actor)
+    if sede_cond is not None:
+        stmt = stmt.where(sede_cond)
 
     rows = db.execute(stmt).all()
     out: list[dict[str, Any]] = []

@@ -3,6 +3,7 @@
 El administrador global (rol ADMINISTRADOR) ve todas las sedes.
 El administrador de sede (ADMINISTRADOR_SEDE) solo opera sobre su sede,
 sus clientes y los vendedores asociados a esa sede.
+Logística con sede asignada queda limitada a esa sede; sin sede, ve todas.
 """
 from __future__ import annotations
 
@@ -32,6 +33,8 @@ def sede_id_alcance(actor: Usuario | None) -> int | None:
                 status.HTTP_403_FORBIDDEN,
                 "Tu usuario no tiene una sede asignada.",
             )
+        return actor.sede_id
+    if actor.rol == RolUsuario.LOGISTICA.value:
         return actor.sede_id
     return None
 

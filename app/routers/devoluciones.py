@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
-from app.core.enums import RolUsuario
+from app.core.enums import ROLES_DE_AREA
 from app.core.permissions import Permiso
+from app.core.sede_scope import exigir_pqrs_en_alcance
+from app.models.pqrs import PQRS
 from app.models.usuario import Usuario
 from app.schemas.devolucion import (
     DevolucionDetalleOut,
@@ -23,12 +25,16 @@ router = APIRouter(
 )
 
 
-def _assert_calidad_area(actor: Usuario, area_codigo: str) -> None:
-    if actor.rol == RolUsuario.CALIDAD.value and area_codigo != "CALIDAD":
+def _assert_alcance_devolucion(db: Session, actor: Usuario, row: dict) -> None:
+    """Roles de área solo gestionan su área; los roles con sede, solo su sede."""
+    if actor.rol in ROLES_DE_AREA and row["area_codigo"] != actor.rol:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "No tienes permisos para gestionar devoluciones fuera del área CALIDAD.",
+            f"No tienes permisos para gestionar devoluciones fuera del área {actor.rol}.",
         )
+    pqrs = db.get(PQRS, row["pqrs_id"])
+    if pqrs is not None:
+        exigir_pqrs_en_alcance(actor, pqrs)
 
 
 @router.get("/", response_model=list[DevolucionPendienteOut])
@@ -49,7 +55,7 @@ def obtener_detalle(
     row = devolucion_service.get_devolucion_detalle(db, devolucion_id)
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Devolución no encontrada")
-    _assert_calidad_area(actor, row["area_codigo"])
+    _assert_alcance_devolucion(db, actor, row)
     return DevolucionDetalleOut.model_validate(row)
 
 
@@ -63,7 +69,7 @@ def guardar_radicado(
     prev = devolucion_service.get_devolucion_detalle(db, devolucion_id)
     if not prev:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Devolución no encontrada")
-    _assert_calidad_area(actor, prev["area_codigo"])
+    _assert_alcance_devolucion(db, actor, prev)
     try:
         devolucion_service.guardar_registro_radico(
             db, devolucion_id, data, usuario_id=actor.id

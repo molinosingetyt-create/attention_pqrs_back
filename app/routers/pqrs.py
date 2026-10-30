@@ -358,8 +358,8 @@ def notificar_calidad_pqrs(
     pqrs_id: int,
     db: Session = Depends(get_db),
 ):
-    pqrs_service.notify_calidad_for_pqrs(db, pqrs_id)
-    return {"ok": True}
+    notificado = pqrs_service.notify_calidad_for_pqrs(db, pqrs_id)
+    return {"ok": True, "notificado": notificado}
 
 
 @router.get("/{pqrs_id}/seguimientos", response_model=list[SeguimientoOut])

@@ -9,6 +9,7 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.enums import (
+    ROLES_DE_AREA,
     EstadoAnalisisResponsabilidad,
     EstadoPQRS,
     RolUsuario,
@@ -290,10 +291,42 @@ def _notify_area_for_pqrs(db: Session, pqrs: PQRS) -> None:
     )
 
 
-def notify_calidad_for_pqrs(db: Session, pqrs_id: int, actor: Usuario | None = None) -> None:
+def notify_calidad_for_pqrs(db: Session, pqrs_id: int, actor: Usuario | None = None) -> bool:
+    """Notifica al área responsable. En boceto no se envía: se hará al abrirla."""
     pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
     _validar_evidencias_productos_completas(pqrs)
+    if pqrs.estado == EstadoPQRS.BOCETO.value:
+        return False
     _notify_area_for_pqrs(db, pqrs)
+    return True
+
+
+def _validar_transicion_boceto(
+    db: Session, actor: Usuario, pqrs: PQRS, new_state: str
+) -> bool:
+    """Valida cambios de estado que involucran BOCETO.
+
+    Devuelve True si la PQRS pasa de boceto a abierta (hay que notificar al área).
+    """
+    if new_state == pqrs.estado:
+        return False
+    if new_state == EstadoPQRS.BOCETO.value:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Una PQRS no puede regresar al estado boceto.",
+        )
+    if pqrs.estado != EstadoPQRS.BOCETO.value:
+        return False
+    permission_service.exigir_permiso(db, actor, Permiso.PQRS_APROBAR_BOCETO)
+    if new_state not in (EstadoPQRS.ABIERTA.value, EstadoPQRS.RECHAZADA.value):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Una PQRS en boceto solo puede pasar a abierta o rechazada.",
+        )
+    if new_state == EstadoPQRS.ABIERTA.value:
+        _validar_evidencias_productos_completas(pqrs)
+        return True
+    return False
 
 
 def _assert_cliente_usable_por_vendedor(db: Session, cliente: Cliente, vendedor: Usuario) -> None:
@@ -336,6 +369,12 @@ def create_pqrs(db: Session, data: PQRSCreate, creador: Usuario) -> PQRS:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "El vendedor no existe.")
         exigir_vendedor_en_alcance(creador, vend)
 
+    # Las PQRS de vendedores quedan en boceto hasta que un administrador las abra.
+    estado_inicial = (
+        EstadoPQRS.BOCETO.value
+        if creador.rol == RolUsuario.VENDEDOR.value
+        else EstadoPQRS.ABIERTA.value
+    )
     primer_producto = data.productos[0] if data.productos else None
     pqrs = PQRS(
         cliente_id=data.cliente_id,
@@ -345,15 +384,19 @@ def create_pqrs(db: Session, data: PQRSCreate, creador: Usuario) -> PQRS:
         numero_factura=data.numero_factura or (primer_producto.numero_factura if primer_producto else None),
         lote=data.lote or (primer_producto.lote if primer_producto else None),
         descripcion=data.descripcion,
-        estado=EstadoPQRS.ABIERTA.value,
+        estado=estado_inicial,
     )
     for prod in data.productos:
         pqrs.productos.append(_producto_pqrs_desde_create(db, prod))
 
     pqrs.seguimientos.append(
         Seguimiento(
-            estado=EstadoPQRS.ABIERTA.value,
-            descripcion="PQRS creada.",
+            estado=estado_inicial,
+            descripcion=(
+                "PQRS creada como boceto."
+                if estado_inicial == EstadoPQRS.BOCETO.value
+                else "PQRS creada."
+            ),
             usuario_id=creador.id,
         )
     )
@@ -387,7 +430,7 @@ def _puede_subir_evidencia(
         return (
             carga_inicial
             and pqrs.vendedor_id == actor.id
-            and pqrs.estado == EstadoPQRS.ABIERTA.value
+            and pqrs.estado in (EstadoPQRS.BOCETO.value, EstadoPQRS.ABIERTA.value)
         )
     return False
 
@@ -486,11 +529,12 @@ def upsert_analisis_producto(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS está rechazada; no se puede modificar el análisis.",
         )
-    # En PQRS cerrada, solo administradores, administrativo comercial y CALIDAD
-    # pueden seguir gestionando el análisis (cada uno dentro de sus áreas).
+    # En PQRS cerrada, solo administradores, administrativo comercial y los roles
+    # de área (CALIDAD, LOGISTICA) pueden seguir gestionando el análisis
+    # (cada uno dentro de sus áreas).
     if pqrs.estado == EstadoPQRS.CERRADA.value and actor.rol not in (
         RolUsuario.ADMINISTRADOR.value,
-        RolUsuario.CALIDAD.value,
+        *ROLES_DE_AREA,
         *_ROLES_GESTION_COMERCIAL,
     ):
         raise HTTPException(
@@ -841,8 +885,10 @@ def update_pqrs(
             "La PQRS est? cerrada o rechazada; no admite modificaciones.",
         )
 
+    abre_boceto = False
     if "estado" in changes and changes["estado"] is not None:
         new_state = changes["estado"].value if hasattr(changes["estado"], "value") else changes["estado"]
+        abre_boceto = _validar_transicion_boceto(db, actor, pqrs, new_state)
         if new_state != pqrs.estado:
             pqrs.estado = new_state
             if new_state in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
@@ -868,6 +914,8 @@ def update_pqrs(
     db.commit()
     db.refresh(pqrs)
 
+    if abre_boceto:
+        _notify_area_for_pqrs(db, pqrs)
     if pqrs.estado == EstadoPQRS.CERRADA.value and pqrs.cliente and pqrs.cliente.correo:
         email_service.notify_pqrs_closed(
             to_email=pqrs.cliente.correo,
@@ -1103,6 +1151,7 @@ def add_seguimiento(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS est? cerrada o rechazada; no se puede registrar seguimiento.",
         )
+    abre_boceto = _validar_transicion_boceto(db, actor, pqrs, estado.value)
     seg = Seguimiento(
         pqrs_id=pqrs.id,
         usuario_id=actor.id,
@@ -1119,6 +1168,8 @@ def add_seguimiento(
     db.commit()
     db.refresh(seg)
     db.refresh(pqrs)
+    if abre_boceto:
+        _notify_area_for_pqrs(db, pqrs)
     devolucion_service.ensure_devolucion_pendiente(
         db,
         pqrs,

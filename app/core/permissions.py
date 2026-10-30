@@ -36,6 +36,7 @@ class Permiso:
     PQRS_SEGUIMIENTO_CREAR = "pqrs.seguimiento.crear"
     PQRS_EVIDENCIA_SUBIR = "pqrs.evidencia.subir"
     PQRS_FILTRAR_VENDEDOR = "pqrs.filtrar_vendedor"
+    PQRS_APROBAR_BOCETO = "pqrs.aprobar_boceto"
 
     DEVOLUCIONES_LISTAR = "devoluciones.listar"
     DEVOLUCIONES_VALIDAR = "devoluciones.validar"
@@ -68,6 +69,7 @@ PERMISSION_CATALOG: list[PermisoMeta] = [
     {"codigo": Permiso.PQRS_SEGUIMIENTO_CREAR, "modulo": "pqrs", "descripcion": "Registrar seguimiento en historial"},
     {"codigo": Permiso.PQRS_EVIDENCIA_SUBIR, "modulo": "pqrs", "descripcion": "Subir evidencias a PQRS"},
     {"codigo": Permiso.PQRS_FILTRAR_VENDEDOR, "modulo": "pqrs", "descripcion": "Filtrar listado por vendedor"},
+    {"codigo": Permiso.PQRS_APROBAR_BOCETO, "modulo": "pqrs", "descripcion": "Pasar PQRS de boceto a abierta (notifica a las áreas)"},
     {"codigo": Permiso.DEVOLUCIONES_LISTAR, "modulo": "devoluciones", "descripcion": "Ver devoluciones pendientes"},
     {"codigo": Permiso.DEVOLUCIONES_VALIDAR, "modulo": "devoluciones", "descripcion": "Registrar y validar devoluciones"},
     {"codigo": Permiso.USUARIOS_GESTIONAR, "modulo": "usuarios", "descripcion": "Gestionar usuarios del sistema"},
@@ -122,6 +124,12 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         Permiso.DEVOLUCIONES_VALIDAR,
     ],
     "CALIDAD": [
+        *_BASE_AUTHENTICATED,
+        Permiso.DEVOLUCIONES_LISTAR,
+        Permiso.DEVOLUCIONES_VALIDAR,
+        Permiso.INCONFORMIDADES_GESTIONAR,
+    ],
+    "LOGISTICA": [
         *_BASE_AUTHENTICATED,
         Permiso.DEVOLUCIONES_LISTAR,
         Permiso.DEVOLUCIONES_VALIDAR,

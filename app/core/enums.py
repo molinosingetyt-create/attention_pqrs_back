@@ -8,6 +8,12 @@ class RolUsuario(str, Enum):
     VENDEDOR = "VENDEDOR"
     ADMINISTRATIVO_COMERCIAL = "ADMINISTRATIVO_COMERCIAL"
     CALIDAD = "CALIDAD"
+    LOGISTICA = "LOGISTICA"
+
+
+# Roles ligados a un área de negocio: gestionan solo devoluciones y análisis
+# de productos cuya área coincide con el rol.
+ROLES_DE_AREA: frozenset[str] = frozenset({"CALIDAD", "LOGISTICA"})
 
 
 class TipoPQRS(str, Enum):
@@ -25,6 +31,8 @@ TIPOS_PRODUCTO_MOTIVO_OPCIONALES: frozenset[TipoPQRS] = frozenset(
 
 
 class EstadoPQRS(str, Enum):
+    # Creada por un vendedor; no se notifica a las áreas hasta que se abra.
+    BOCETO = "BOCETO"
     ABIERTA = "ABIERTA"
     EN_PROCESO = "EN_PROCESO"
     CERRADA = "CERRADA"
