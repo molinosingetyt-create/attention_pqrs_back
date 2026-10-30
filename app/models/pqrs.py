@@ -36,6 +36,18 @@ class PQRS(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    @property
+    def esta_cerrada(self) -> bool:
+        """Cerrada, o recogida después del cierre (conserva `fecha_cierre`)."""
+        return self.estado == "CERRADA" or (
+            self.estado == "RECOGIDA" and self.fecha_cierre is not None
+        )
+
+    @property
+    def es_terminal(self) -> bool:
+        """Cerrada o rechazada: no admite modificaciones (salvo marcar recogida)."""
+        return self.estado == "RECHAZADA" or self.esta_cerrada
+
     cliente = relationship("Cliente", back_populates="pqrs")
     vendedor = relationship(
         "Usuario", back_populates="pqrs_como_vendedor", foreign_keys=[vendedor_id]

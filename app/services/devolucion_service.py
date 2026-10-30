@@ -8,7 +8,7 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.enums import ROLES_DE_AREA, EstadoPQRS
+from app.core.enums import ROLES_DE_AREA
 from app.core.sede_scope import condicion_pqrs_por_sede
 from app.models import Area, Cliente, Devolucion, Inconformidad, PQRS, ProductoPQRS
 from app.models.producto_catalogo import ProductoCatalogo
@@ -145,7 +145,7 @@ def ensure_devolucion_pendiente(
     observaciones: str | None = None,
 ) -> None:
     """Crea devolución pendiente al cerrar PQRS con inconformidad (fecha_registro = cierre)."""
-    if pqrs.estado != EstadoPQRS.CERRADA.value:
+    if not pqrs.esta_cerrada:
         return
     if not pqrs.inconformidad_id:
         return
@@ -288,7 +288,7 @@ def guardar_registro_radico(
     pqrs = db.get(PQRS, dev.pqrs_id)
     if not pqrs:
         raise ValueError("PQRS no encontrada")
-    if pqrs.estado != EstadoPQRS.CERRADA.value:
+    if not pqrs.esta_cerrada:
         raise ValueError("Solo se radica devolución para PQRS cerrada")
 
     _ = usuario_id

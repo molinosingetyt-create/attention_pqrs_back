@@ -37,6 +37,9 @@ class EstadoPQRS(str, Enum):
     EN_PROCESO = "EN_PROCESO"
     CERRADA = "CERRADA"
     RECHAZADA = "RECHAZADA"
+    # Producto recogido al cliente. Se asigna una sola vez; también desde CERRADA,
+    # en cuyo caso la PQRS conserva su fecha de cierre y sigue siendo de solo lectura.
+    RECOGIDA = "RECOGIDA"
 
 
 class EstadoAnalisisResponsabilidad(str, Enum):

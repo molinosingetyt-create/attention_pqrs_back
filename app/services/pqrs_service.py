@@ -301,6 +301,49 @@ def notify_calidad_for_pqrs(db: Session, pqrs_id: int, actor: Usuario | None = N
     return True
 
 
+def _ya_fue_recogida(db: Session, pqrs: PQRS) -> bool:
+    if pqrs.estado == EstadoPQRS.RECOGIDA.value:
+        return True
+    return (
+        db.execute(
+            select(Seguimiento.id)
+            .where(
+                Seguimiento.pqrs_id == pqrs.id,
+                Seguimiento.estado == EstadoPQRS.RECOGIDA.value,
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
+def _validar_transicion_estado(
+    db: Session, actor: Usuario, pqrs: PQRS, new_state: str
+) -> bool:
+    """Reglas de cambio de estado. Devuelve True si se abre un boceto (notificar)."""
+    recogida = EstadoPQRS.RECOGIDA.value
+    if pqrs.es_terminal:
+        # Cerrada: el único cambio permitido es marcarla como recogida, una sola vez.
+        if (
+            pqrs.estado == EstadoPQRS.CERRADA.value
+            and new_state == recogida
+            and not _ya_fue_recogida(db, pqrs)
+        ):
+            return False
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "La PQRS está rechazada; no admite cambios."
+            if pqrs.estado == EstadoPQRS.RECHAZADA.value
+            else "La PQRS está cerrada; solo puede marcarse como recogida (una única vez).",
+        )
+    if new_state == recogida and pqrs.estado != recogida and _ya_fue_recogida(db, pqrs):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "La PQRS ya fue marcada como recogida; este estado solo se asigna una vez.",
+        )
+    return _validar_transicion_boceto(db, actor, pqrs, new_state)
+
+
 def _validar_transicion_boceto(
     db: Session, actor: Usuario, pqrs: PQRS, new_state: str
 ) -> bool:
@@ -532,7 +575,7 @@ def upsert_analisis_producto(
     # En PQRS cerrada, solo administradores, administrativo comercial y los roles
     # de área (CALIDAD, LOGISTICA) pueden seguir gestionando el análisis
     # (cada uno dentro de sus áreas).
-    if pqrs.estado == EstadoPQRS.CERRADA.value and actor.rol not in (
+    if pqrs.esta_cerrada and actor.rol not in (
         RolUsuario.ADMINISTRADOR.value,
         *ROLES_DE_AREA,
         *_ROLES_GESTION_COMERCIAL,
@@ -583,11 +626,6 @@ def upsert_satisfaccion_cliente(
     actor: Usuario,
 ) -> PqrsSatisfaccionCliente:
     pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
-    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "La PQRS está cerrada o rechazada; no se puede modificar la satisfacción.",
-        )
     if actor.rol not in (RolUsuario.ADMINISTRADOR.value, *_ROLES_GESTION_COMERCIAL):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -879,7 +917,10 @@ def update_pqrs(
     permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
     changes = data.model_dump(exclude_unset=True)
 
-    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value) and changes:
+    # En una PQRS cerrada solo se acepta el cambio de estado a recogida;
+    # el resto de campos se ignora.
+    era_terminal = pqrs.es_terminal
+    if era_terminal and changes and changes.get("estado") is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS est? cerrada o rechazada; no admite modificaciones.",
@@ -888,7 +929,7 @@ def update_pqrs(
     abre_boceto = False
     if "estado" in changes and changes["estado"] is not None:
         new_state = changes["estado"].value if hasattr(changes["estado"], "value") else changes["estado"]
-        abre_boceto = _validar_transicion_boceto(db, actor, pqrs, new_state)
+        abre_boceto = _validar_transicion_estado(db, actor, pqrs, new_state)
         if new_state != pqrs.estado:
             pqrs.estado = new_state
             if new_state in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
@@ -900,6 +941,9 @@ def update_pqrs(
                     usuario_id=actor.id,
                 )
             )
+
+    if era_terminal:
+        changes = {}
 
     if "vendedor_id" in changes and changes["vendedor_id"] is not None:
         vend = db.get(Usuario, changes["vendedor_id"])
@@ -937,7 +981,7 @@ def add_productos(
     if actor is not None:
         permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
     pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
-    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
+    if pqrs.es_terminal:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS est? cerrada o rechazada; no se pueden agregar productos.",
@@ -963,7 +1007,7 @@ def update_producto(
 ) -> ProductoPQRS:
     permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
     pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
-    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
+    if pqrs.es_terminal:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS está cerrada o rechazada; no se pueden modificar productos.",
@@ -1041,7 +1085,7 @@ def delete_producto(
     if actor is not None:
         permission_service.exigir_permiso(db, actor, Permiso.PQRS_EDITAR)
     pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
-    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
+    if pqrs.es_terminal:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS está cerrada o rechazada; no se pueden eliminar productos.",
@@ -1088,7 +1132,7 @@ def add_evidencia(
             status.HTTP_403_FORBIDDEN,
             "No tienes permisos para subir evidencias en esta PQRS.",
         )
-    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
+    if pqrs.es_terminal:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "La PQRS está cerrada o rechazada; no se pueden subir evidencias.",
@@ -1146,12 +1190,7 @@ def add_seguimiento(
 ) -> Seguimiento:
     permission_service.exigir_permiso(db, actor, Permiso.PQRS_SEGUIMIENTO_CREAR)
     pqrs = _get_pqrs_or_404(db, pqrs_id, actor)
-    if pqrs.estado in (EstadoPQRS.CERRADA.value, EstadoPQRS.RECHAZADA.value):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "La PQRS est? cerrada o rechazada; no se puede registrar seguimiento.",
-        )
-    abre_boceto = _validar_transicion_boceto(db, actor, pqrs, estado.value)
+    abre_boceto = _validar_transicion_estado(db, actor, pqrs, estado.value)
     seg = Seguimiento(
         pqrs_id=pqrs.id,
         usuario_id=actor.id,
