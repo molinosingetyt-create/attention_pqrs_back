@@ -412,12 +412,9 @@ def create_pqrs(db: Session, data: PQRSCreate, creador: Usuario) -> PQRS:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "El vendedor no existe.")
         exigir_vendedor_en_alcance(creador, vend)
 
-    # Las PQRS de vendedores quedan en boceto hasta que un administrador las abra.
-    estado_inicial = (
-        EstadoPQRS.BOCETO.value
-        if creador.rol == RolUsuario.VENDEDOR.value
-        else EstadoPQRS.ABIERTA.value
-    )
+    # Toda PQRS (cualquier tipo y creador) nace en boceto hasta que un
+    # usuario con permiso de aprobar boceto la abra.
+    estado_inicial = EstadoPQRS.BOCETO.value
     primer_producto = data.productos[0] if data.productos else None
     pqrs = PQRS(
         cliente_id=data.cliente_id,
